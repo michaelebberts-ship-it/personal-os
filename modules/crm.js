@@ -10,7 +10,7 @@ import { COLORS, TAG_META, GROUPS } from "../js/config.js";
 let _container = null;
 let _ctx = null;
 let _state = {
-  view: "grid",           // "grid" | "nudges" | "birthdays"
+  view: "grid",           // "grid" | "birthdays"
   group: "all",
   search: "",
   detail: null,           // contact being viewed
@@ -48,31 +48,6 @@ const dbu = b => {
   return Math.round((nx-t)/86400e3);
 };
 const fmtB = b => { if(!b) return ""; const p=b.split("-"); if(p.length<3) return ""; return new Date(+p[0],+p[1]-1,+p[2]).toLocaleDateString("en-US",{month:"long",day:"numeric"}); };
-
-function urgency(days, nudge) {
-  const r = days / nudge;
-  if (r >= 1.5) return { col:"var(--color-red)",   bg:"var(--color-red-bg)",    label:`🚨 ${days}d — overdue` };
-  if (r >= 0.8) return { col:"var(--color-orange)", bg:"var(--color-orange-bg)", label:`⏰ ${days}d — getting close` };
-  return              { col:"var(--color-green)",  bg:"var(--color-green-bg)",  label:`✅ ${days}d ago` };
-}
-
-function strength(c) {
-  const notes = (c.contactNotes||[]).length;
-  if (!c.lastContact && !notes) return { label:"New",    emoji:"🌱", col:"#9B59B6", bg:"#F3E5F5", pct:20 };
-  const r = daysSince(c.lastContact) / (c.nudgeDays||30);
-  const boost = notes>=5 ? 0.3 : notes>=2 ? 0.15 : 0;
-  const eff = r - boost;
-  if (eff <= 0.5) return { label:"Strong", emoji:"🔥", col:"var(--color-green)",  bg:"var(--color-green-bg)",  pct:100 };
-  if (eff <= 1.0) return { label:"Good",   emoji:"👍", col:"var(--color-green)",  bg:"var(--color-green-bg)",  pct:72  };
-  if (eff <= 1.5) return { label:"Fading", emoji:"😐", col:"var(--color-orange)", bg:"var(--color-orange-bg)", pct:45  };
-  return               { label:"Cold",   emoji:"🥶", col:"var(--color-red)",    bg:"var(--color-red-bg)",    pct:22  };
-}
-
-function nudgeList(contacts) {
-  return contacts
-    .filter(c => daysSince(c.lastContact) >= (c.nudgeDays||30)*0.8)
-    .sort((a,b) => (daysSince(b.lastContact)/b.nudgeDays) - (daysSince(a.lastContact)/a.nudgeDays));
-}
 
 function tagPill(tag) {
   const m = TAG_META[tag] || { label:tag, bg:"var(--bg-surface-2)", col:"var(--text-secondary)" };
@@ -115,13 +90,11 @@ function render() {
 }
 
 function renderTopBar(contacts) {
-  const nl = nudgeList(contacts);
   return `
     <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4);flex-wrap:wrap;align-items:center">
       <div style="display:flex;gap:var(--space-2);flex:1">
         <button class="btn ${_state.view==="grid"?"btn-primary":"btn-secondary"} btn-sm" data-view="grid">👥 All</button>
-        <button class="btn ${_state.view==="nudges"?"btn-primary":"btn-secondary"} btn-sm" data-view="nudges">💬 Nudges${nl.length?` <span class="badge">${nl.length}</span>`:""}</button>
-        <button class="btn ${_state.view==="birthdays"?"btn-primary":"btn-secondary"} btn-sm" data-view="birthdays">🎂</button>
+        <button class="btn ${_state.view==="birthdays"?"btn-primary":"btn-secondary"} btn-sm" data-view="birthdays">🎂 Birthdays</button>
       </div>
       <button class="btn btn-primary btn-sm" id="add-contact-btn">+ Add</button>
     </div>
@@ -129,7 +102,6 @@ function renderTopBar(contacts) {
 }
 
 function renderMainView(contacts) {
-  if (_state.view === "nudges") return renderNudges(contacts);
   if (_state.view === "birthdays") return renderBirthdays(contacts);
   return renderGrid(contacts);
 }
@@ -169,20 +141,17 @@ function renderGrid(contacts) {
   html += `<div class="card-grid">`;
   list.forEach(c => {
     const days = daysSince(c.lastContact);
-    const u = urgency(days===999?0:days, c.nudgeDays||30);
-    const st = strength(c);
     const bdDays = dbu(c.birthday);
     html += `
       <div class="card" style="cursor:pointer;position:relative;overflow:hidden" data-open-contact="${c.id}">
         <div style="height:3px;background:${c.color}"></div>
         <div style="padding:var(--space-3)">
-          <div title="${st.label} connection" style="position:absolute;top:var(--space-3);right:var(--space-3);font-size:14px">${st.emoji}</div>
           <div class="avatar avatar-md" style="background:${c.color}22;color:${c.color};margin-bottom:var(--space-2)">${ini(c)}</div>
           <div style="font-weight:700;font-size:var(--text-md);margin-bottom:2px">${escH(c.fname)} ${escH(c.lname)}</div>
           <div style="font-size:var(--text-xs);color:var(--text-secondary);margin-bottom:var(--space-2)">${c.note?escH(c.note.slice(0,40))+"…":""}</div>
           <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:var(--space-2)">${(c.tags||[]).slice(0,2).map(tagPill).join("")}</div>
           <div style="display:flex;align-items:center;justify-content:space-between;padding-top:var(--space-2);border-top:1px solid var(--separator)">
-            <span style="font-size:var(--text-xs);font-weight:700;color:${u.col}">${days===999?"never":days+"d"}</span>
+            <span style="font-size:var(--text-xs);color:var(--text-secondary)">${days===999?"never contacted":days+"d ago"}</span>
             <button class="btn btn-sm" style="background:var(--color-green-bg);color:var(--color-green);padding:4px 8px" data-quick-contact="${c.id}">✓</button>
           </div>
           ${bdDays!==null&&bdDays<=14?`<div style="margin-top:var(--space-2);font-size:var(--text-xs);font-weight:700;color:var(--color-crm)">🎂 ${bdDays===0?"Today!":"In "+bdDays+"d"}</div>`:""}
@@ -192,25 +161,6 @@ function renderGrid(contacts) {
   });
   html += `</div>`;
   return html;
-}
-
-function renderNudges(contacts) {
-  const nl = nudgeList(contacts);
-  if (!nl.length) return `<div class="empty-state"><div class="empty-state__icon">🎉</div><div class="empty-state__title">All caught up!</div><div class="empty-state__body">Your circle feels the love.</div></div>`;
-  return `<div style="display:flex;flex-direction:column;gap:var(--space-2)">
-    ${nl.map(c => {
-      const days = daysSince(c.lastContact);
-      const u = urgency(days===999?0:days, c.nudgeDays||30);
-      return `<div class="list-row list-row--clickable card" data-open-contact="${c.id}" style="border-radius:var(--radius-lg)">
-        <div class="avatar avatar-md" style="background:${c.color}22;color:${c.color}">${ini(c)}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:700">${escH(c.fname)} ${escH(c.lname)}</div>
-          <span class="pill" style="background:${u.bg};color:${u.col}">${u.label}</span>
-        </div>
-        <button class="btn btn-sm" style="background:var(--color-green);color:#fff" data-open-contact="${c.id}">Draft 💬</button>
-      </div>`;
-    }).join("")}
-  </div>`;
 }
 
 function renderBirthdays(contacts) {
@@ -233,8 +183,6 @@ function renderBirthdays(contacts) {
 function renderDetailPanel(c, allContacts) {
   const fresh = allContacts.find(x=>x.id===c.id) || c;
   const days = daysSince(fresh.lastContact);
-  const u = urgency(days===999?0:days, fresh.nudgeDays||30);
-  const st = strength(fresh);
   const bdDays = dbu(fresh.birthday);
   const isBday = bdDays !== null && bdDays <= 14;
   const notes = fresh.contactNotes || [];
@@ -275,24 +223,7 @@ function renderDetailPanel(c, allContacts) {
               ${smsLink ? `<a href="${smsLink}" class="btn btn-sm" style="background:var(--color-green);color:#fff">Text 📱</a>` : ""}
             </div>` : ""}
             <div class="list-row"><span>📝</span><span style="font-size:var(--text-sm);flex:1">${escH(fresh.note||"No note")}</span></div>
-            <div class="list-row"><span>⏱️</span><span style="font-size:var(--text-sm)">Last contact: <strong>${days===999?"Never":days+"d ago"}</strong></span></div>
-            <div class="list-row" style="border:none"><span>🔔</span><span style="font-size:var(--text-sm)">Nudge every ${fresh.nudgeDays||30}d</span></div>
-          </div>
-
-          <!-- Strength + urgency -->
-          <div class="card">
-            <div style="padding:var(--space-3)">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2)">
-                <span style="font-size:var(--text-sm);font-weight:700;color:${st.col}">${st.emoji} ${st.label} connection</span>
-                <span style="font-size:var(--text-xs);color:var(--text-secondary)">${notes.length} note${notes.length===1?"":"s"}</span>
-              </div>
-              <div style="height:6px;background:var(--bg-surface-2);border-radius:var(--radius-full);overflow:hidden">
-                <div style="height:100%;width:${st.pct}%;background:${st.col};border-radius:var(--radius-full)"></div>
-              </div>
-            </div>
-            <div class="list-row" style="border:none">
-              <span class="pill w-full" style="background:${u.bg};color:${u.col};justify-content:center">${u.label}</span>
-            </div>
+            <div class="list-row" style="border:none"><span>⏱️</span><span style="font-size:var(--text-sm)">Last contact: <strong>${days===999?"Never":days+"d ago"}</strong></span></div>
           </div>
 
           <!-- Draft text -->
@@ -409,7 +340,6 @@ function renderAddModal() {
           <div><div class="section-label">Phone</div><input id="add-phone" class="input" placeholder="555-555-1234" type="tel"></div>
           <div><div class="section-label">Birthday</div><input id="add-bday" class="input" type="date"></div>
           <div><div class="section-label">How do you know them?</div><input id="add-note" class="input" placeholder="Met at BBQ, childhood friend…"></div>
-          <div><div class="section-label">Nudge every (days)</div><input id="add-nudge" class="input" type="number" value="30" min="1" max="365"></div>
           <div>
             <div class="section-label">Color</div>
             <div style="display:flex;gap:var(--space-2)">
@@ -475,7 +405,6 @@ function bindEvents() {
       fname,lname,phone:d,
       birthday:$("add-bday")?.value||"",
       note:$("add-note")?.value?.trim()||"",
-      nudgeDays:+($("add-nudge")?.value||30),
       color:_state.addColor,tags:[..._state.addTags],
       lastContact:null,contactNotes:[],gifts:[]
     };
