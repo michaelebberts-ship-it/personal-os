@@ -1,0 +1,17 @@
+.DS_Store
+*.log
+node_modules/
+cloudflare/
+mac-sync/
+*.desktop
+SESSION_SUMMARY.md
+DEPLOY.md
+FIRE_TV_SETUP.md
+KITCHEN_SETUP.md
+shortcuts-guide.html
+serve.py
+start-kitchen.sh
+update-kitchen.sh
+mockup.html
+schemas.json
+firestore.rules

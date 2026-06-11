@@ -1,0 +1,229 @@
+/* Kitchen kiosk — portrait (vertical) 24" display. Big, glanceable, no scroll chrome. */
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg-primary, #F2F2F7);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+#kitchen {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+  box-sizing: border-box;
+}
+
+.k-loading {
+  margin: auto;
+  font-size: 28px;
+  color: var(--text-secondary);
+}
+
+/* Theme toggle (auto / light / dark) — small, bottom-left, out of the way */
+.k-themebtn {
+  position: fixed; bottom: 14px; left: 14px; z-index: 50;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--bg-surface, #fff); color: var(--text-secondary);
+  border: 1px solid var(--separator, #ddd); border-radius: 999px;
+  padding: 8px 14px; font-size: 15px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 1px 8px rgba(0,0,0,0.12); opacity: 0.55;
+}
+.k-themebtn:hover { opacity: 1; }
+
+/* Sleep / screen-off overlay */
+.k-sleep {
+  position: fixed; inset: 0; z-index: 200;
+  background: #000; color: #2a2a2a;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  cursor: pointer;
+}
+.k-sleep__clock { font-size: 64px; font-weight: 800; }
+.k-sleep__hint { font-size: 18px; margin-top: 12px; }
+
+/* ── Header: big clock + date, centered ───────────────────── */
+.k-header {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.k-head-clock { text-align: center; }
+.k-clock { font-size: 140px; font-weight: 800; line-height: 0.95; letter-spacing: -4px; }
+.k-date  { font-size: 52px; font-weight: 700; color: var(--text-secondary); margin-top: 12px; }
+
+/* Current conditions + 4-day forecast, all on one row */
+.k-wxrow { display: flex; align-items: center; gap: 18px; justify-content: flex-end; }
+.k-wxnow { display: flex; align-items: center; gap: 14px; }
+.k-weather__emoji { font-size: 72px; line-height: 1; }
+.k-weather__temp  { font-size: 72px; font-weight: 800; line-height: 1; }
+.k-weather__desc  { font-size: 24px; color: var(--text-secondary); }
+.k-wxextra { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.k-wxchip { font-size: 16px; font-weight: 700; color: var(--text-secondary); background: var(--bg-surface-2, #f2f2f7); border-radius: 999px; padding: 3px 11px; }
+.k-wx3day { display: flex; gap: 14px; }
+.k-wxday { text-align: center; min-width: 92px; background: var(--bg-surface, #fff); border-radius: 16px; padding: 12px 10px; box-shadow: 0 1px 8px rgba(0,0,0,0.05); }
+.k-wxday__d { font-size: 18px; font-weight: 700; color: var(--text-secondary); }
+.k-wxday__e { font-size: 34px; line-height: 1.3; }
+.k-wxday__t { font-size: 22px; font-weight: 800; }
+.k-wxday__t span { font-weight: 600; color: var(--text-tertiary); }
+.k-wxday__r { font-size: 17px; color: var(--accent, #007AFF); font-weight: 700; }
+
+/* ── Tile row (weather · dinner · coming up) ─────────────── */
+.k-tilerow { display: grid; grid-template-columns: 1.5fr 1fr 1.3fr; gap: 18px; }
+.k-tile { display: flex; flex-direction: column; }
+
+/* Weather tile (replaces debrief) — no fixed height, fills naturally */
+.k-tile--weather { height: auto !important; }
+.k-tile--weather .k-tile__body { overflow: visible; }
+.k-wx-tile { display: flex; flex-direction: column; gap: 20px; }
+.k-wx-tile__now { display: flex; align-items: center; gap: 20px; }
+.k-wx-tile__emoji { font-size: 90px; line-height: 1; flex-shrink: 0; }
+.k-wx-tile__temp { font-size: 80px; font-weight: 800; line-height: 1; }
+.k-wx-tile__desc { font-size: 28px; color: var(--text-secondary); margin-top: 4px; }
+.k-wx-tile__days { display: flex; gap: 10px; }
+.k-wxday--tile { flex: 1; text-align: center; background: var(--bg-surface-2, #f2f2f7); border-radius: 16px; padding: 12px 8px; }
+.k-wxday--tile .k-wxday__d { font-size: 20px; font-weight: 700; color: var(--text-secondary); }
+.k-wxday--tile .k-wxday__e { font-size: 40px; line-height: 1.3; }
+.k-wxday--tile .k-wxday__t { font-size: 24px; font-weight: 800; }
+.k-wxday--tile .k-wxday__t span { font-weight: 600; color: var(--text-tertiary); }
+.k-wxday--tile .k-wxday__r { font-size: 18px; color: var(--accent, #007AFF); font-weight: 700; }
+.k-tile__body { flex: 1; overflow: hidden; min-height: 0; }
+.k-tile .k-debrief { font-size: 18px; line-height: 1.45; white-space: pre-wrap; }
+.k-brief__head { font-size: 34px; font-weight: 800; line-height: 1.15; margin-bottom: 14px; }
+.k-brief__hits { margin: 0; padding-left: 1.1em; font-size: 23px; line-height: 1.5; }
+.k-brief__hits li { margin-bottom: 8px; }
+.k-tile__more { font-size: 16px; font-weight: 700; color: var(--accent, #007AFF); margin-top: 8px; }
+.k-tile--extras { overflow-y: auto; }
+.k-extra { display: flex; flex-direction: column; gap: 4px; }
+.k-extra__row { display: flex; justify-content: space-between; gap: 10px; font-size: 22px; margin-bottom: 3px; }
+.k-extra__name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.k-extra__when { flex-shrink: 0; font-weight: 700; color: var(--accent, #007AFF); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; text-align: right; }
+
+/* ── Cards ───────────────────────────────────────────────── */
+.k-card {
+  background: var(--bg-surface, #fff);
+  border-radius: 24px;
+  padding: 22px 26px;
+  box-shadow: 0 2px 14px rgba(0,0,0,0.06);
+  cursor: pointer;
+}
+.k-card__title {
+  font-size: 26px; font-weight: 900; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--accent, #007AFF);
+  margin-bottom: 14px; text-align: center;
+}
+
+/* Debrief */
+.k-debrief { white-space: pre-wrap; font-size: 24px; line-height: 1.5; }
+.k-debrief b { font-weight: 800; }
+
+/* Calendar agenda */
+.k-event { display: flex; gap: 16px; padding: 10px 0; border-top: 1px solid var(--separator, #E5E5EA); }
+.k-event:first-child { border-top: none; }
+.k-event__time { font-size: 24px; font-weight: 800; color: var(--accent, #007AFF); min-width: 130px; }
+.k-event__title { font-size: 24px; font-weight: 600; }
+.k-event__loc { font-size: 18px; color: var(--text-tertiary); }
+.k-empty { font-size: 22px; color: var(--text-tertiary); padding: 8px 0; }
+
+/* Tonight's dinner */
+.k-dinner__name { font-size: 40px; font-weight: 800; }
+.k-dinner__macros { font-size: 24px; font-weight: 700; color: var(--color-orange, #FF9500); margin-top: 6px; }
+
+/* Week grid (calendar tile) */
+.k-weekgrid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.k-wday {
+  background: var(--bg-surface-2, #F2F2F7); border-radius: 12px;
+  padding: 8px 6px; min-height: 150px; min-width: 0;
+}
+.k-wday--today { background: var(--accent-light, #E3F2FD); outline: 2px solid var(--accent, #007AFF); }
+.k-wday__dow { font-size: 21px; font-weight: 700; color: var(--text-tertiary); text-transform: uppercase; }
+.k-wday__num { font-size: 34px; font-weight: 800; margin-bottom: 6px; }
+.k-wevent {
+  font-size: 22px; line-height: 1.3; margin-bottom: 6px;
+  overflow-wrap: anywhere;   /* wrap long titles instead of clipping */
+}
+.k-wevent__t { color: var(--accent, #007AFF); font-weight: 700; }
+
+/* Month grid (expand) — near full-screen, fills height so the whole month fits */
+/* .k-overlay prefix beats the base .k-modal rule regardless of source order */
+.k-overlay .k-modal--wide {
+  width: 98vw; max-width: 98vw;
+  height: 96vh; max-height: 96vh;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+/* One grid for headers + cells so columns always line up (no scrollbar drift) */
+.k-month { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.k-overlay .k-modal--wide .k-month { flex: 1; overflow-y: auto; grid-auto-rows: auto; align-content: start; }
+.k-mhead {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--bg-surface, #fff);
+  font-size: 22px; font-weight: 700; color: var(--text-tertiary); text-align: center;
+  padding: 2px 0 8px;
+}
+/* Rows grow to fit all events (auto); empty days keep a min height.
+   min-width:0 lets the 7 columns shrink to fit the screen (no sideways scroll). */
+.k-mcell {
+  background: var(--bg-surface-2, #F2F2F7); border-radius: 8px;
+  padding: 8px 10px; min-height: 130px; min-width: 0;
+}
+.k-mcell--out { opacity: 0.4; }
+.k-mcell--today { outline: 2px solid var(--accent, #007AFF); background: var(--accent-light, #E3F2FD); }
+.k-mcell__num { font-size: 27px; font-weight: 800; margin-bottom: 5px; }
+/* Wrap full event text so nothing is hidden — cells grow taller, scroll vertically */
+.k-mevent { font-size: 21px; line-height: 1.3; margin-bottom: 6px; overflow-wrap: anywhere; }
+
+/* ── Photo slideshow (fills remaining space) ─────────────── */
+.k-photos {
+  flex: 1;
+  position: relative;
+  border-radius: 24px;
+  overflow: hidden;
+  background: #000;
+  min-height: 0;
+}
+/* A slide is one landscape photo full-bleed, or two portraits side by side */
+.k-slide {
+  position: absolute; inset: 0;
+  display: flex; gap: 4px;
+  opacity: 0; transition: opacity 1.2s ease;
+}
+.k-slide.k-slide--on { opacity: 1; }
+.k-slide img { flex: 1; width: 100%; height: 100%; object-fit: cover; min-width: 0; }
+.k-photos__placeholder {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #888; font-size: 22px; text-align: center; padding: 24px;
+}
+
+/* ── Expand overlay ──────────────────────────────────────── */
+.k-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 40px; z-index: 100;
+}
+.k-modal {
+  background: var(--bg-surface, #fff);
+  border-radius: 28px;
+  max-width: 92%; max-height: 88%;
+  width: 760px;
+  padding: 32px 36px;
+  overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+}
+.k-modal__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.k-modal__title { font-size: 34px; font-weight: 800; }
+.k-modal__close {
+  font-size: 30px; line-height: 1; border: none; background: var(--bg-surface-2, #EEE);
+  width: 52px; height: 52px; border-radius: 50%; cursor: pointer;
+}
+.k-modal__section { font-size: 18px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin: 18px 0 10px; }
+.k-modal ul, .k-modal ol { font-size: 23px; line-height: 1.6; padding-left: 1.3em; margin: 0; }
+.k-modal li { margin-bottom: 8px; }
+.k-modal__macros { font-size: 26px; font-weight: 800; color: var(--color-orange, #FF9500); }
+.k-modal__text { font-size: 24px; line-height: 1.55; white-space: pre-wrap; }
+.k-badge { display:inline-block; font-size:18px; font-weight:700; padding:4px 12px; border-radius:999px; background:var(--bg-surface-2,#EEE); margin-right:8px; }
+.k-spin { font-size: 22px; color: var(--text-secondary); padding: 16px 0; }

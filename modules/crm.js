@@ -1,0 +1,637 @@
+/**
+ * CRM Module — Inner Circle Contacts
+ * Reads/writes the same Firebase collection as the standalone CRM.
+ */
+
+import { refs, dbSet, dbUpdate, dbDelete, uid } from "../js/db.js";
+import { draftText, generateGiftIdeas, getApiKey } from "../js/ai.js";
+import { COLORS, TAG_META, GROUPS } from "../js/config.js";
+
+let _container = null;
+let _ctx = null;
+let _state = {
+  view: "grid",           // "grid" | "nudges" | "birthdays"
+  group: "all",
+  search: "",
+  detail: null,           // contact being viewed
+  showAdd: false,
+  showEdit: false,
+  addColor: COLORS[0],
+  addTags: [],
+  editColor: COLORS[0],
+  editTags: [],
+  draftText: null,
+  draftLoading: false,
+  noteAdding: false,
+  giftAdding: false,
+  giftGenerating: false,
+  addOccasion: "🎂 Birthday",
+  showApiKey: false,
+};
+
+const OCCASIONS = ["🎂 Birthday","🎄 Christmas","🎁 Holiday","👨‍👧 Father's Day","👩‍👧 Mother's Day","🎓 Graduation","🏠 Housewarming","💍 Wedding","⭐ Just because"];
+
+// ── Utils ───────────────────────────────────────────────────────
+const tod = () => new Date().toISOString().slice(0, 10);
+const daysSince = d => d ? Math.floor((Date.now() - new Date(d).getTime()) / 86400e3) : 999;
+const ini = c => ((c.fname||"")[0] + (c.lname||"")[0] || "?").toUpperCase();
+const escH = s => String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const telDigits = p => { let d = String(p||"").replace(/\D/g,""); if(!d) return ""; if(d.length===10) d="1"+d; return d; };
+const fmtPhone = p => { const d=telDigits(p); if(!d) return ""; return d.length===11&&d[0]==="1" ? `+1 (${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}` : "+"+d; };
+const fmtD = iso => new Date(iso).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+const dbu = b => {
+  if (!b) return null;
+  const p = b.split("-"); if (p.length<3) return null;
+  const t = new Date(); t.setHours(0,0,0,0);
+  const nx = new Date(t.getFullYear(), +p[1]-1, +p[2]);
+  if (nx < t) nx.setFullYear(t.getFullYear()+1);
+  return Math.round((nx-t)/86400e3);
+};
+const fmtB = b => { if(!b) return ""; const p=b.split("-"); if(p.length<3) return ""; return new Date(+p[0],+p[1]-1,+p[2]).toLocaleDateString("en-US",{month:"long",day:"numeric"}); };
+
+function urgency(days, nudge) {
+  const r = days / nudge;
+  if (r >= 1.5) return { col:"var(--color-red)",   bg:"var(--color-red-bg)",    label:`🚨 ${days}d — overdue` };
+  if (r >= 0.8) return { col:"var(--color-orange)", bg:"var(--color-orange-bg)", label:`⏰ ${days}d — getting close` };
+  return              { col:"var(--color-green)",  bg:"var(--color-green-bg)",  label:`✅ ${days}d ago` };
+}
+
+function strength(c) {
+  const notes = (c.contactNotes||[]).length;
+  if (!c.lastContact && !notes) return { label:"New",    emoji:"🌱", col:"#9B59B6", bg:"#F3E5F5", pct:20 };
+  const r = daysSince(c.lastContact) / (c.nudgeDays||30);
+  const boost = notes>=5 ? 0.3 : notes>=2 ? 0.15 : 0;
+  const eff = r - boost;
+  if (eff <= 0.5) return { label:"Strong", emoji:"🔥", col:"var(--color-green)",  bg:"var(--color-green-bg)",  pct:100 };
+  if (eff <= 1.0) return { label:"Good",   emoji:"👍", col:"var(--color-green)",  bg:"var(--color-green-bg)",  pct:72  };
+  if (eff <= 1.5) return { label:"Fading", emoji:"😐", col:"var(--color-orange)", bg:"var(--color-orange-bg)", pct:45  };
+  return               { label:"Cold",   emoji:"🥶", col:"var(--color-red)",    bg:"var(--color-red-bg)",    pct:22  };
+}
+
+function nudgeList(contacts) {
+  return contacts
+    .filter(c => daysSince(c.lastContact) >= (c.nudgeDays||30)*0.8)
+    .sort((a,b) => (daysSince(b.lastContact)/b.nudgeDays) - (daysSince(a.lastContact)/a.nudgeDays));
+}
+
+function tagPill(tag) {
+  const m = TAG_META[tag] || { label:tag, bg:"var(--bg-surface-2)", col:"var(--text-secondary)" };
+  return `<span class="pill" style="background:${m.bg};color:${m.col}">${m.label}</span>`;
+}
+
+// ── Firebase ops ────────────────────────────────────────────────
+async function saveContact(data) {
+  await dbSet(refs.contact(data.id), data);
+}
+async function updateContact(id, patch) {
+  await dbUpdate(refs.contact(id), patch);
+}
+async function deleteContact(id) {
+  await dbDelete(refs.contact(id));
+}
+
+// ── Render ──────────────────────────────────────────────────────
+function render() {
+  if (!_container) return;
+  const contacts = _ctx.state().contacts;
+
+  let html = `<div class="module-content" id="crm-root">`;
+  html += renderTopBar(contacts);
+  html += renderMainView(contacts);
+  if (_state.detail) html += renderDetailPanel(_state.detail, contacts);
+  if (_state.showAdd) html += renderAddModal();
+  html += "</div>";
+
+  _container.innerHTML = html;
+  bindEvents();
+
+  // Check for pending contact from Home module
+  const pendingId = sessionStorage.getItem("crm_open_contact");
+  if (pendingId) {
+    sessionStorage.removeItem("crm_open_contact");
+    const c = contacts.find(x => x.id === pendingId);
+    if (c) { _state.detail = c; render(); }
+  }
+}
+
+function renderTopBar(contacts) {
+  const nl = nudgeList(contacts);
+  return `
+    <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4);flex-wrap:wrap;align-items:center">
+      <div style="display:flex;gap:var(--space-2);flex:1">
+        <button class="btn ${_state.view==="grid"?"btn-primary":"btn-secondary"} btn-sm" data-view="grid">👥 All</button>
+        <button class="btn ${_state.view==="nudges"?"btn-primary":"btn-secondary"} btn-sm" data-view="nudges">💬 Nudges${nl.length?` <span class="badge">${nl.length}</span>`:""}</button>
+        <button class="btn ${_state.view==="birthdays"?"btn-primary":"btn-secondary"} btn-sm" data-view="birthdays">🎂</button>
+      </div>
+      <button class="btn btn-primary btn-sm" id="add-contact-btn">+ Add</button>
+    </div>
+  `;
+}
+
+function renderMainView(contacts) {
+  if (_state.view === "nudges") return renderNudges(contacts);
+  if (_state.view === "birthdays") return renderBirthdays(contacts);
+  return renderGrid(contacts);
+}
+
+function renderGrid(contacts) {
+  const GROUPS_LIST = GROUPS;
+  let list = _state.group === "all" ? contacts : contacts.filter(c => (c.tags||[]).includes(_state.group));
+  if (_state.search.trim()) {
+    const q = _state.search.toLowerCase();
+    list = list.filter(c => (c.fname+" "+c.lname).toLowerCase().includes(q));
+  }
+
+  let html = `
+    <div style="display:flex;gap:var(--space-2);overflow-x:auto;padding-bottom:var(--space-2);margin-bottom:var(--space-3)">
+      ${GROUPS_LIST.map(g => {
+        const count = g.id==="all" ? contacts.length : contacts.filter(c=>(c.tags||[]).includes(g.id)).length;
+        const active = _state.group === g.id;
+        return `<button class="btn btn-sm ${active?"btn-primary":"btn-secondary"}" data-group="${g.id}" style="flex-shrink:0">
+          ${g.icon} ${g.label} <span style="opacity:0.7">${count}</span>
+        </button>`;
+      }).join("")}
+    </div>
+    <div style="margin-bottom:var(--space-3)">
+      <input class="input" id="crm-search" placeholder="🔍 Search…" value="${escH(_state.search)}" style="font-size:var(--text-sm)">
+    </div>
+  `;
+
+  if (_state.group !== "all") {
+    const gm = GROUPS_LIST.find(g=>g.id===_state.group) || {label:"group"};
+    html += `<button class="btn btn-primary w-full" style="margin-bottom:var(--space-3)" id="group-text-btn">💬 Text all of ${gm.label}</button>`;
+  }
+
+  if (!list.length) {
+    return html + `<div class="empty-state"><div class="empty-state__icon">👥</div><div class="empty-state__title">${_state.search?"No matches":"Empty here"}</div><div class="empty-state__body">Add people or change the filter.</div></div>`;
+  }
+
+  html += `<div class="card-grid">`;
+  list.forEach(c => {
+    const days = daysSince(c.lastContact);
+    const u = urgency(days===999?0:days, c.nudgeDays||30);
+    const st = strength(c);
+    const bdDays = dbu(c.birthday);
+    html += `
+      <div class="card" style="cursor:pointer;position:relative;overflow:hidden" data-open-contact="${c.id}">
+        <div style="height:3px;background:${c.color}"></div>
+        <div style="padding:var(--space-3)">
+          <div title="${st.label} connection" style="position:absolute;top:var(--space-3);right:var(--space-3);font-size:14px">${st.emoji}</div>
+          <div class="avatar avatar-md" style="background:${c.color}22;color:${c.color};margin-bottom:var(--space-2)">${ini(c)}</div>
+          <div style="font-weight:700;font-size:var(--text-md);margin-bottom:2px">${escH(c.fname)} ${escH(c.lname)}</div>
+          <div style="font-size:var(--text-xs);color:var(--text-secondary);margin-bottom:var(--space-2)">${c.note?escH(c.note.slice(0,40))+"…":""}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:var(--space-2)">${(c.tags||[]).slice(0,2).map(tagPill).join("")}</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;padding-top:var(--space-2);border-top:1px solid var(--separator)">
+            <span style="font-size:var(--text-xs);font-weight:700;color:${u.col}">${days===999?"never":days+"d"}</span>
+            <button class="btn btn-sm" style="background:var(--color-green-bg);color:var(--color-green);padding:4px 8px" data-quick-contact="${c.id}">✓</button>
+          </div>
+          ${bdDays!==null&&bdDays<=14?`<div style="margin-top:var(--space-2);font-size:var(--text-xs);font-weight:700;color:var(--color-crm)">🎂 ${bdDays===0?"Today!":"In "+bdDays+"d"}</div>`:""}
+        </div>
+      </div>
+    `;
+  });
+  html += `</div>`;
+  return html;
+}
+
+function renderNudges(contacts) {
+  const nl = nudgeList(contacts);
+  if (!nl.length) return `<div class="empty-state"><div class="empty-state__icon">🎉</div><div class="empty-state__title">All caught up!</div><div class="empty-state__body">Your circle feels the love.</div></div>`;
+  return `<div style="display:flex;flex-direction:column;gap:var(--space-2)">
+    ${nl.map(c => {
+      const days = daysSince(c.lastContact);
+      const u = urgency(days===999?0:days, c.nudgeDays||30);
+      return `<div class="list-row list-row--clickable card" data-open-contact="${c.id}" style="border-radius:var(--radius-lg)">
+        <div class="avatar avatar-md" style="background:${c.color}22;color:${c.color}">${ini(c)}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700">${escH(c.fname)} ${escH(c.lname)}</div>
+          <span class="pill" style="background:${u.bg};color:${u.col}">${u.label}</span>
+        </div>
+        <button class="btn btn-sm" style="background:var(--color-green);color:#fff" data-open-contact="${c.id}">Draft 💬</button>
+      </div>`;
+    }).join("")}
+  </div>`;
+}
+
+function renderBirthdays(contacts) {
+  const bl = contacts.filter(c=>c.birthday).map(c=>({...c,dbu:dbu(c.birthday)})).sort((a,b)=>a.dbu-b.dbu);
+  if (!bl.length) return `<div class="empty-state"><div class="empty-state__icon">🎂</div><div class="empty-state__title">No birthdays tracked</div><div class="empty-state__body">Add birthdays when editing contacts.</div></div>`;
+  return `<div class="card">
+    ${bl.map(c => `<div class="list-row list-row--clickable" data-open-contact="${c.id}">
+      <div class="avatar avatar-md" style="background:${c.color}22;color:${c.color}">${ini(c)}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700">${escH(c.fname)} ${escH(c.lname)}</div>
+        <div style="font-size:var(--text-sm);color:var(--text-secondary)">${fmtB(c.birthday)}</div>
+      </div>
+      <div style="font-weight:800;color:${c.dbu===0?"var(--color-red)":c.dbu<=7?"var(--color-orange)":"var(--color-crm)"}">
+        ${c.dbu===0?"🎉 Today!":c.dbu===1?"Tomorrow":"In "+c.dbu+"d"}
+      </div>
+    </div>`).join("")}
+  </div>`;
+}
+
+function renderDetailPanel(c, allContacts) {
+  const fresh = allContacts.find(x=>x.id===c.id) || c;
+  const days = daysSince(fresh.lastContact);
+  const u = urgency(days===999?0:days, fresh.nudgeDays||30);
+  const st = strength(fresh);
+  const bdDays = dbu(fresh.birthday);
+  const isBday = bdDays !== null && bdDays <= 14;
+  const notes = fresh.contactNotes || [];
+  const gifts = fresh.gifts || [];
+  const smsLink = fresh.phone ? `sms:+${telDigits(fresh.phone)}` : null;
+
+  // Group gift ideas by occasion
+  const grouped = {};
+  gifts.forEach(g => { grouped[g.occasion] = grouped[g.occasion]||[]; grouped[g.occasion].push(g); });
+
+  return `
+    <div class="panel-overlay" id="detail-overlay">
+      <div class="panel" id="detail-panel">
+
+        <!-- Header -->
+        <div style="padding:var(--space-5);border-bottom:1px solid var(--separator)">
+          <div style="display:flex;align-items:flex-start;gap:var(--space-3)">
+            <div class="avatar avatar-xl" style="background:${fresh.color}22;color:${fresh.color}">${ini(fresh)}</div>
+            <div style="flex:1;min-width:0">
+              <div style="font-size:var(--text-xl);font-weight:800">${escH(fresh.fname)} ${escH(fresh.lname)}</div>
+              <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:var(--space-1)">${(fresh.tags||[]).map(tagPill).join("")}</div>
+            </div>
+            <button id="close-detail" style="width:28px;height:28px;border-radius:50%;background:var(--bg-surface-2);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:13px">✕</button>
+          </div>
+        </div>
+
+        <!-- Body -->
+        <div style="padding:var(--space-4);display:flex;flex-direction:column;gap:var(--space-4)">
+
+          <!-- Birthday alert -->
+          ${isBday ? `<div class="pill w-full" style="background:var(--color-yellow-bg);color:#92400E;font-size:var(--text-sm);justify-content:center;padding:var(--space-2)">
+            🎂 ${bdDays===0?"It's their birthday TODAY! 🎉":"Birthday in "+bdDays+(bdDays===1?" day":"days")} — ${fmtB(fresh.birthday)}
+          </div>` : ""}
+
+          <!-- Info -->
+          <div class="card">
+            ${fresh.phone ? `<div class="list-row"><span>📞</span><span style="font-size:var(--text-sm)">${fmtPhone(fresh.phone)}</span>
+              ${smsLink ? `<a href="${smsLink}" class="btn btn-sm" style="background:var(--color-green);color:#fff">Text 📱</a>` : ""}
+            </div>` : ""}
+            <div class="list-row"><span>📝</span><span style="font-size:var(--text-sm);flex:1">${escH(fresh.note||"No note")}</span></div>
+            <div class="list-row"><span>⏱️</span><span style="font-size:var(--text-sm)">Last contact: <strong>${days===999?"Never":days+"d ago"}</strong></span></div>
+            <div class="list-row" style="border:none"><span>🔔</span><span style="font-size:var(--text-sm)">Nudge every ${fresh.nudgeDays||30}d</span></div>
+          </div>
+
+          <!-- Strength + urgency -->
+          <div class="card">
+            <div style="padding:var(--space-3)">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2)">
+                <span style="font-size:var(--text-sm);font-weight:700;color:${st.col}">${st.emoji} ${st.label} connection</span>
+                <span style="font-size:var(--text-xs);color:var(--text-secondary)">${notes.length} note${notes.length===1?"":"s"}</span>
+              </div>
+              <div style="height:6px;background:var(--bg-surface-2);border-radius:var(--radius-full);overflow:hidden">
+                <div style="height:100%;width:${st.pct}%;background:${st.col};border-radius:var(--radius-full)"></div>
+              </div>
+            </div>
+            <div class="list-row" style="border:none">
+              <span class="pill w-full" style="background:${u.bg};color:${u.col};justify-content:center">${u.label}</span>
+            </div>
+          </div>
+
+          <!-- Draft text -->
+          <div>
+            <div class="section-label">Draft a text</div>
+            ${_state.draftLoading ? `
+              <div style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-3);background:var(--bg-surface-2);border-radius:var(--radius-md)">
+                <div class="loader-spinner" style="width:16px;height:16px"></div>
+                <span style="font-size:var(--text-sm);color:var(--text-secondary)">Thinking…</span>
+              </div>
+            ` : _state.draftText ? `
+              <div style="background:var(--color-green-bg);border:1.5px solid var(--color-green);border-radius:var(--radius-md);padding:var(--space-3);font-size:var(--text-sm);line-height:1.7;font-style:italic;color:#166534;margin-bottom:var(--space-2)">${escH(_state.draftText)}</div>
+              <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
+                ${smsLink ? `<a href="${smsLink}?body=${encodeURIComponent(_state.draftText)}" class="btn btn-sm" style="background:var(--color-green);color:#fff">📱 Open Messages</a>` : ""}
+                <button class="btn btn-secondary btn-sm" id="copy-draft">📋 Copy</button>
+                <button class="btn btn-ghost btn-sm" id="clear-draft">↺ New</button>
+              </div>
+            ` : `
+              <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
+                <button class="btn btn-sm draft-btn" style="background:var(--color-crm);color:#fff" data-dtype="catchup">💬 Check in</button>
+                <button class="btn btn-sm draft-btn" style="background:var(--accent);color:#fff" data-dtype="hangout">🍻 Hangout</button>
+                ${isBday?`<button class="btn btn-sm draft-btn" style="background:var(--color-orange);color:#fff" data-dtype="birthday">🎂 Birthday</button>`:""}
+                <button class="btn btn-sm draft-btn" style="background:var(--color-green);color:#fff" data-dtype="bbq">🔥 BBQ</button>
+              </div>
+            `}
+          </div>
+
+          <!-- Mark contacted -->
+          <button class="btn btn-secondary w-full" id="mark-contacted">✓ Mark as contacted today</button>
+
+          <!-- Notes -->
+          <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2)">
+              <div class="section-label" style="margin:0">Notes after talking</div>
+              ${_state.noteAdding?"":"<button class='btn btn-ghost btn-sm' id='start-note'>+ Add</button>"}
+            </div>
+            ${_state.noteAdding ? `
+              <div style="background:var(--bg-surface-2);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-2)">
+                <textarea id="note-input" class="input" placeholder="What did you talk about?" style="min-height:80px;margin-bottom:var(--space-2)"></textarea>
+                <div style="display:flex;gap:var(--space-2);justify-content:flex-end">
+                  <button class="btn btn-secondary btn-sm" id="cancel-note">Cancel</button>
+                  <button class="btn btn-primary btn-sm" id="save-note">Save</button>
+                </div>
+              </div>
+            ` : ""}
+            ${!notes.length && !_state.noteAdding ? `<div style="text-align:center;padding:var(--space-4);background:var(--bg-surface-2);border-radius:var(--radius-md);border:1.5px dashed var(--separator)"><div style="font-size:20px;margin-bottom:4px">📝</div><div style="font-size:var(--text-sm);color:var(--text-secondary)">No notes yet</div></div>` : ""}
+            ${notes.map(n=>`<div style="background:var(--bg-surface-2);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-2)">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                <span style="font-size:var(--text-xs);color:var(--text-tertiary)">${fmtD(n.date)}</span>
+                <button class="btn" style="font-size:12px;color:var(--text-tertiary)" data-del-note="${n.id}">✕</button>
+              </div>
+              <div style="font-size:var(--text-sm);color:var(--text-primary);line-height:1.6;white-space:pre-wrap">${escH(n.text)}</div>
+            </div>`).join("")}
+          </div>
+
+          <!-- Gift ideas -->
+          <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2)">
+              <div class="section-label" style="margin:0">Gift ideas 🎁</div>
+              ${_state.giftAdding?"":"<button class='btn btn-ghost btn-sm' id='start-gift'>+ Add</button>"}
+            </div>
+            ${_state.giftAdding ? `
+              <div style="background:var(--bg-surface-2);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-2)">
+                <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:var(--space-2)">
+                  ${OCCASIONS.map(o=>`<button class="pill" style="background:${_state.addOccasion===o?"var(--accent)":"var(--bg-surface-3)"};color:${_state.addOccasion===o?"#fff":"var(--text-secondary)"};cursor:pointer" data-occasion="${o.replace(/"/g,"&quot;")}">${o}</button>`).join("")}
+                </div>
+                <input id="gift-input" class="input" placeholder="e.g. Traeger cookbook, nice whiskey…" style="margin-bottom:var(--space-2)">
+                <div style="display:flex;gap:var(--space-2);justify-content:space-between;align-items:center">
+                  <button class="btn btn-sm" style="background:#AF52DE;color:#fff" id="gen-gifts">
+                    ${_state.giftGenerating?`<span class="spinner-sm"></span> Thinking…`:"✨ AI ideas"}
+                  </button>
+                  <div style="display:flex;gap:var(--space-2)">
+                    <button class="btn btn-secondary btn-sm" id="cancel-gift">Cancel</button>
+                    <button class="btn btn-primary btn-sm" id="save-gift">Save</button>
+                  </div>
+                </div>
+              </div>
+            ` : ""}
+            ${!gifts.length&&!_state.giftAdding ? `<div style="text-align:center;padding:var(--space-4);background:var(--bg-surface-2);border-radius:var(--radius-md);border:1.5px dashed var(--separator)"><div style="font-size:20px;margin-bottom:4px">🎁</div><div style="font-size:var(--text-sm);color:var(--text-secondary)">No gift ideas yet</div></div>` : ""}
+            ${Object.keys(grouped).map(occ=>`
+              <div style="margin-bottom:var(--space-2)">
+                <div style="font-size:var(--text-xs);font-weight:700;color:var(--text-tertiary);margin-bottom:4px">${occ}</div>
+                ${grouped[occ].map(g=>`<div style="display:flex;align-items:center;gap:var(--space-2);padding:var(--space-2);border-radius:var(--radius-sm);background:${g.bought?"var(--color-green-bg)":"var(--bg-surface-2)"};border:1px solid ${g.bought?"var(--color-green)":"var(--separator)"};margin-bottom:4px">
+                  <input type="checkbox" ${g.bought?"checked":""} data-tog-gift="${g.id}" style="width:15px;height:15px;cursor:pointer;accent-color:var(--color-green)">
+                  <span style="flex:1;font-size:var(--text-sm);color:${g.bought?"var(--text-secondary)":"var(--text-primary)"};text-decoration:${g.bought?"line-through":"none"}">${escH(g.text)}</span>
+                  <button class="btn" style="font-size:12px;color:var(--text-tertiary)" data-del-gift="${g.id}">✕</button>
+                </div>`).join("")}
+              </div>
+            `).join("")}
+          </div>
+
+          <!-- Delete -->
+          <button class="btn btn-danger btn-sm w-full" id="delete-contact">Delete contact</button>
+
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderAddModal() {
+  return `
+    <div class="modal-overlay" id="add-modal-overlay">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>Add contact</h2>
+          <button id="close-add" class="btn btn-ghost btn-sm">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-3)">
+            <div><div class="section-label">First name</div><input id="add-fname" class="input" placeholder="John"></div>
+            <div><div class="section-label">Last name</div><input id="add-lname" class="input" placeholder="Smith"></div>
+          </div>
+          <div><div class="section-label">Phone</div><input id="add-phone" class="input" placeholder="555-555-1234" type="tel"></div>
+          <div><div class="section-label">Birthday</div><input id="add-bday" class="input" type="date"></div>
+          <div><div class="section-label">How do you know them?</div><input id="add-note" class="input" placeholder="Met at BBQ, childhood friend…"></div>
+          <div><div class="section-label">Nudge every (days)</div><input id="add-nudge" class="input" type="number" value="30" min="1" max="365"></div>
+          <div>
+            <div class="section-label">Color</div>
+            <div style="display:flex;gap:var(--space-2)">
+              ${COLORS.map(c=>`<button class="btn" style="width:28px;height:28px;border-radius:50%;background:${c};border:3px solid ${_state.addColor===c?"#fff":"transparent"};outline:2px solid ${_state.addColor===c?c:"transparent"}" data-pick-color="${c}"></button>`).join("")}
+            </div>
+          </div>
+          <div>
+            <div class="section-label">Groups</div>
+            <div style="display:flex;flex-wrap:wrap;gap:var(--space-2)">
+              ${Object.keys(TAG_META).map(t=>{const m=TAG_META[t];const sel=_state.addTags.includes(t);return `<button class="pill" style="background:${sel?m.col:"var(--bg-surface-2)"};color:${sel?"#fff":m.col};cursor:pointer;padding:var(--space-1) var(--space-3)" data-pick-tag="${t}">${m.label}</button>`;}).join("")}
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="cancel-add">Cancel</button>
+          <button class="btn btn-primary" id="confirm-add">Add contact</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Event binding ────────────────────────────────────────────────
+function bindEvents() {
+  const $ = id => document.getElementById(id);
+  const on = (id, ev, fn) => { const el=$(id); if(el) el.addEventListener(ev, fn); };
+  const del = (sel, fn) => _container.querySelectorAll(sel).forEach(el=>el.addEventListener("click",fn));
+
+  // View switching
+  _container.querySelectorAll("[data-view]").forEach(btn=>btn.addEventListener("click",()=>{_state.view=btn.dataset.view;render();}));
+
+  // Group filter
+  _container.querySelectorAll("[data-group]").forEach(btn=>btn.addEventListener("click",()=>{_state.group=btn.dataset.group;render();}));
+
+  // Search
+  const searchInput = $("crm-search");
+  if (searchInput) searchInput.addEventListener("input", e=>{_state.search=e.target.value;render();});
+
+  // Add contact
+  on("add-contact-btn","click",()=>{_state.showAdd=true;render();});
+  on("close-add","click",()=>{_state.showAdd=false;render();});
+  on("cancel-add","click",()=>{_state.showAdd=false;render();});
+
+  // Color picker in add modal
+  _container.querySelectorAll("[data-pick-color]").forEach(btn=>btn.addEventListener("click",()=>{_state.addColor=btn.dataset.pickColor;render();}));
+
+  // Tag picker in add modal
+  _container.querySelectorAll("[data-pick-tag]").forEach(btn=>btn.addEventListener("click",()=>{
+    const t=btn.dataset.pickTag;
+    _state.addTags=_state.addTags.includes(t)?_state.addTags.filter(x=>x!==t):[..._state.addTags,t];
+    render();
+  }));
+
+  // Confirm add
+  on("confirm-add","click",async()=>{
+    const fname=$("add-fname")?.value?.trim()||"";
+    const lname=$("add-lname")?.value?.trim()||"";
+    if(!fname&&!lname){alert("Name required");return;}
+    const phone=String($("add-phone")?.value||"").replace(/\D/g,"");
+    let d=phone;if(d.length===10)d="1"+d;
+    const c={
+      id:uid()+Math.random().toString(36).slice(2,5),
+      fname,lname,phone:d,
+      birthday:$("add-bday")?.value||"",
+      note:$("add-note")?.value?.trim()||"",
+      nudgeDays:+($("add-nudge")?.value||30),
+      color:_state.addColor,tags:[..._state.addTags],
+      lastContact:null,contactNotes:[],gifts:[]
+    };
+    await saveContact(c);
+    _state.showAdd=false;_state.addTags=[];render();
+  });
+
+  // Open contact
+  _container.querySelectorAll("[data-open-contact]").forEach(el=>{
+    el.addEventListener("click",()=>{
+      const id=el.dataset.openContact;
+      const c=_ctx.state().contacts.find(x=>x.id===id);
+      if(c){_state.detail=c;_state.draftText=null;_state.noteAdding=false;_state.giftAdding=false;render();}
+    });
+  });
+
+  // Quick mark contacted
+  _container.querySelectorAll("[data-quick-contact]").forEach(btn=>{
+    btn.addEventListener("click",e=>{
+      e.stopPropagation();
+      updateContact(btn.dataset.quickContact,{lastContact:tod()});
+    });
+  });
+
+  // Close detail panel
+  on("close-detail","click",()=>{_state.detail=null;render();});
+  on("detail-overlay","click",e=>{if(e.target.id==="detail-overlay"){_state.detail=null;render();}});
+
+  // Mark contacted
+  on("mark-contacted","click",async()=>{
+    if(_state.detail){await updateContact(_state.detail.id,{lastContact:tod()});_state.detail=null;render();}
+  });
+
+  // Draft text buttons
+  _container.querySelectorAll(".draft-btn").forEach(btn=>{
+    btn.addEventListener("click",async()=>{
+      if(!getApiKey()){showToast("Add your API key first");return;}
+      _state.draftLoading=true;_state.draftText=null;render();
+      const c=_state.detail;
+      _state.draftText=await draftText(btn.dataset.dtype,c)||"Hey "+c.fname+"! Hope you're doing well — let's catch up soon.";
+      _state.draftLoading=false;render();
+    });
+  });
+
+  on("copy-draft","click",()=>{
+    if(_state.draftText){navigator.clipboard?.writeText(_state.draftText);showToast("Copied!");}
+  });
+  on("clear-draft","click",()=>{_state.draftText=null;render();});
+
+  // Notes
+  on("start-note","click",()=>{_state.noteAdding=true;render();setTimeout(()=>$("note-input")?.focus(),50);});
+  on("cancel-note","click",()=>{_state.noteAdding=false;render();});
+  on("save-note","click",async()=>{
+    const text=$("note-input")?.value?.trim();
+    if(!text||!_state.detail)return;
+    const c=_ctx.state().contacts.find(x=>x.id===_state.detail.id)||_state.detail;
+    const note={id:uid(),date:tod(),text};
+    const notes=[note,...(c.contactNotes||[])];
+    await updateContact(c.id,{contactNotes:notes,lastContact:tod()});
+    _state.noteAdding=false;render();
+  });
+
+  del("[data-del-note]",async btn=>{
+    if(!_state.detail)return;
+    const c=_ctx.state().contacts.find(x=>x.id===_state.detail.id)||_state.detail;
+    await updateContact(c.id,{contactNotes:(c.contactNotes||[]).filter(n=>n.id!==btn.dataset.delNote)});
+  });
+
+  // Gifts
+  on("start-gift","click",()=>{_state.giftAdding=true;render();});
+  on("cancel-gift","click",()=>{_state.giftAdding=false;render();});
+  _container.querySelectorAll("[data-occasion]").forEach(btn=>btn.addEventListener("click",()=>{_state.addOccasion=btn.dataset.occasion;render();}));
+
+  on("gen-gifts","click",async()=>{
+    if(!getApiKey()){showToast("Add your API key first");return;}
+    if(!_state.detail||_state.giftGenerating)return;
+    _state.giftGenerating=true;render();
+    const c=_ctx.state().contacts.find(x=>x.id===_state.detail.id)||_state.detail;
+    const ideas=await generateGiftIdeas(c,_state.addOccasion);
+    const existing=c.gifts||[];
+    const newGifts=ideas.map((text,i)=>({id:uid()+i,text,occasion:_state.addOccasion,bought:false,date:tod()}));
+    await updateContact(c.id,{gifts:[...existing,...newGifts]});
+    _state.giftGenerating=false;_state.giftAdding=false;render();
+  });
+
+  on("save-gift","click",async()=>{
+    const text=$("gift-input")?.value?.trim();
+    if(!text||!_state.detail)return;
+    const c=_ctx.state().contacts.find(x=>x.id===_state.detail.id)||_state.detail;
+    const g={id:uid(),text,occasion:_state.addOccasion,bought:false,date:tod()};
+    await updateContact(c.id,{gifts:[...(c.gifts||[]),g]});
+    _state.giftAdding=false;render();
+  });
+
+  del("[data-del-gift]",async btn=>{
+    if(!_state.detail)return;
+    const c=_ctx.state().contacts.find(x=>x.id===_state.detail.id)||_state.detail;
+    await updateContact(c.id,{gifts:(c.gifts||[]).filter(g=>g.id!==btn.dataset.delGift)});
+  });
+
+  del("[data-tog-gift]",async btn=>{
+    if(!_state.detail)return;
+    const c=_ctx.state().contacts.find(x=>x.id===_state.detail.id)||_state.detail;
+    await updateContact(c.id,{gifts:(c.gifts||[]).map(g=>g.id===btn.dataset.togGift?{...g,bought:!g.bought}:g)});
+  });
+
+  // Delete contact
+  on("delete-contact","click",async()=>{
+    if(!_state.detail)return;
+    if(!confirm("Delete "+_state.detail.fname+"? This can't be undone."))return;
+    await deleteContact(_state.detail.id);
+    _state.detail=null;render();
+  });
+}
+
+function showToast(msg) {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.textContent = msg;
+  container.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+// ── Module exports ───────────────────────────────────────────────
+let _stateUnsub = null;
+
+export async function init(container, ctx) {
+  _container = container;
+  _ctx = ctx;
+
+  // Re-render on state changes
+  const { subscribe } = await import("../js/state.js");
+  _stateUnsub = subscribe(() => {
+    if (_state.detail) {
+      const fresh = ctx.state().contacts.find(x => x.id === _state.detail.id);
+      if (fresh) _state.detail = fresh;
+    }
+    render();
+  });
+
+  // Top bar actions
+  ctx.setActions(`<button class="btn btn-primary btn-sm" onclick="document.getElementById('add-contact-btn')?.click()">+ Add contact</button>`);
+
+  render();
+}
+
+export function cleanup() {
+  _stateUnsub?.();
+  _stateUnsub = null;
+  _container = null;
+  _ctx = null;
+  _state.detail = null;
+  _state.showAdd = false;
+  _state.draftText = null;
+  _state.noteAdding = false;
+  _state.giftAdding = false;
+}
