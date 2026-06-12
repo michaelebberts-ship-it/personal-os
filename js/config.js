@@ -10,23 +10,25 @@ export const FIREBASE = {
 export const USER_ID = "owner-inner-circle-crm";
 
 // Claude model for AI features
-export const AI_MODEL = "claude-sonnet-4-5";
+export const AI_MODEL = "claude-sonnet-4-6";
 
 // Local bridge (iCal / AI / photos proxies). Overridable via localStorage for
 // the kitchen Pi if it ever points at another host; defaults to localhost.
 export const BRIDGE_URL = localStorage.getItem("os_bridge_url") || "http://localhost:3333";
 
 // Module registry — controls sidebar order, icons, colors
+// shortName = label under icon in 64px sidebar (max ~5 chars)
 export const MODULES = [
-  { id: "home",      name: "Home",       icon: "⌂",  color: "#007AFF", desc: "Morning brief" },
-  { id: "crm",       name: "Contacts",   icon: "👥", color: "#FF6B35", desc: "Inner circle" },
-  { id: "calendar",  name: "Calendar",   icon: "📅", color: "#FF3B30", desc: "Schedule" },
-  { id: "reminders", name: "Reminders",  icon: "⏰", color: "#FF9500", desc: "To-dos" },
-  { id: "finances",  name: "Finances",   icon: "💰", color: "#34C759", desc: "Budget & bills" },
-  { id: "household", name: "Household",  icon: "🏠", color: "#5AC8FA", desc: "Home ops" },
-  { id: "family",    name: "Family",     icon: "👨‍👩‍👧‍👦", color: "#AF52DE", desc: "Family OS" },
-  { id: "meals",     name: "Meals",      icon: "🍱", color: "#FF9F0A", desc: "Meal prep" },
-  { id: "email",     name: "Email",      icon: "📧", color: "#FF2D55", desc: "Daily brief" },
+  { id: "home",      name: "Home",       shortName: "Home",  icon: "⊞",  color: "#007AFF", desc: "Command dashboard" },
+  { id: "calendar",  name: "Calendar",   shortName: "Cal",   icon: "📅", color: "#FF3B30", desc: "Schedule" },
+  { id: "reminders", name: "Reminders",  shortName: "Tasks", icon: "✓",  color: "#FF9500", desc: "To-dos" },
+  { id: "crm",       name: "Contacts",   shortName: "CRM",   icon: "👥", color: "#00D4FF", desc: "Inner circle" },
+  { id: "finances",  name: "Finances",   shortName: "Money", icon: "💰", color: "#34C759", desc: "Budget & bills" },
+  { id: "meals",     name: "Meals",      shortName: "Meals", icon: "🍽️", color: "#FF9F0A", desc: "Meal prep" },
+  { id: "family",    name: "Family",     shortName: "Fam",   icon: "👨‍👩‍👧‍👦", color: "#AF52DE", desc: "Family OS" },
+  { id: "household", name: "Household",  shortName: "Home",  icon: "🏠", color: "#5AC8FA", desc: "Home ops" },
+  { id: "email",          name: "Email",          shortName: "Email",  icon: "📧", color: "#FF2D55", desc: "Daily brief" },
+  { id: "transformation", name: "Transformation",  shortName: "Fit",    icon: "💪", color: "#C9A961", desc: "Dad Bod → Year 40" },
 ];
 
 export const COLORS = ["#FF6B35","#3498DB","#2ECC71","#9B59B6","#E91E63","#F39C12","#1ABC9C","#E74C3C"];

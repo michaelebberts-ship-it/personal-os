@@ -1,132 +1,190 @@
 /**
- * Home Module — Morning Brief
- * Aggregates data from all other modules into one daily view.
+ * Home — Ebberts Command Center dashboard
+ * Bento grid of live snapshot tiles. Each tile navigates to its full module.
  */
 
 import { getApiKey, generateRecipeDetail } from "../js/ai.js";
 import { getDebrief, getCachedDebrief } from "../js/debrief.js";
 import { refs, dbSet } from "../js/db.js";
+import { fetchWeatherDetail } from "../js/weather.js";
+import { fetchIcalEvents } from "../js/ical.js";
 
 let _container = null;
 let _ctx = null;
 let _unsubscribes = [];
 let _dinnerModal = { open: false, loading: false };
-
-let _debrief = {
-  text: null,
-  loading: false,
-  date: null,   // YYYY-MM-DD the debrief was generated for
-  error: null,
-};
-
-// ── Debrief generator (shared logic in js/debrief.js) ───────────
-async function generateDebrief(todayEvents, reminders) {
-  if (!getApiKey()) {
-    _debrief = { text: null, loading: false, date: tod(), error: "no_key" };
-    render();
-    return;
-  }
-  const cached = getCachedDebrief();
-  if (cached) {
-    _debrief = { text: cached, loading: false, date: tod(), error: null };
-    render();
-    return;
-  }
-  _debrief = { text: null, loading: true, date: tod(), error: null };
-  render();
-
-  const { text, error } = await getDebrief(todayEvents, reminders);
-  _debrief = { text, loading: false, date: tod(), error };
-  render();
-}
+let _debrief = { text: null, loading: false, date: null, error: null };
+let _wx = null;
+let _icalEvents = [];
 
 // ── Helpers ────────────────────────────────────────────────────
+const _esc = s => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
 function tod() { return new Date().toISOString().slice(0, 10); }
 function fmt12(t) {
   if (!t) return "";
   const [h, m] = t.split(":").map(Number);
-  return `${h % 12 || 12}:${String(m).padStart(2,"0")} ${h >= 12 ? "PM" : "AM"}`;
+  return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
 }
-function daysSince(d) { if (!d) return 999; return Math.floor((Date.now() - new Date(d).getTime()) / 86400e3); }
 function dbu(b) {
   if (!b) return null;
   const p = b.split("-");
   if (p.length < 3) return null;
-  const t = new Date(); t.setHours(0,0,0,0);
-  const nx = new Date(t.getFullYear(), +p[1]-1, +p[2]);
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  const nx = new Date(t.getFullYear(), +p[1] - 1, +p[2]);
   if (nx < t) nx.setFullYear(t.getFullYear() + 1);
   return Math.round((nx - t) / 86400e3);
 }
-function ini(c) { return ((c.fname||"")[0] + (c.lname||"")[0] || "??").toUpperCase(); }
-function nudgeList(contacts) {
-  return contacts
-    .filter(c => daysSince(c.lastContact) >= (c.nudgeDays || 30) * 0.8)
-    .sort((a, b) => (daysSince(b.lastContact) / b.nudgeDays) - (daysSince(a.lastContact) / a.nudgeDays));
-}
+function ini(c) { return ((c.fname || "")[0] + (c.lname || "")[0] || "??").toUpperCase(); }
 function greeting() {
   const h = new Date().getHours();
   if (h < 12) return "Good morning";
   if (h < 17) return "Good afternoon";
   return "Good evening";
 }
-function todayLabel() {
-  return new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+
+// ── Debrief ────────────────────────────────────────────────────
+async function generateDebrief(todayEvents, reminders) {
+  if (!getApiKey()) {
+    _debrief = { text: null, loading: false, date: tod(), error: "no_key" };
+    render(); return;
+  }
+  const cached = getCachedDebrief();
+  if (cached) {
+    _debrief = { text: cached, loading: false, date: tod(), error: null };
+    render(); return;
+  }
+  _debrief = { text: null, loading: true, date: tod(), error: null };
+  render();
+  const { text, error } = await getDebrief(todayEvents, reminders);
+  _debrief = { text, loading: false, date: tod(), error };
+  render();
 }
 
 // ── Render ──────────────────────────────────────────────────────
 function render() {
   if (!_container || !_ctx) return;
-  const state = _ctx.state();
-  const { contacts, reminders, events, icalEvents = [], bills, householdTasks, familyMembers, weekDinners } = state;
+  const S = _ctx.state();
+  const {
+    contacts = [], reminders = [], events = [], syncedEvents = [], syncedReminders = [],
+    bills = [], householdTasks = [], familyMembers = [], weekDinners,
+  } = S;
 
-  const nudges = nudgeList(contacts);
-  const birthdays = contacts
+  const today = tod();
+  const allEvents   = [...events, ...syncedEvents, ..._icalEvents];
+  // Deduplicate by title+date in case ical and syncedEvents overlap
+  const seen = new Set();
+  const todayEvents = allEvents
+    .filter(e => {
+      const key = `${e.date}|${e.title}`;
+      if (e.date !== today || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => (a.time || "99:99") < (b.time || "99:99") ? -1 : 1);
+
+  // Merge Firestore reminders + Apple Reminders (deduplicate by title)
+  const firestoreTitles = new Set(reminders.map(r => r.title));
+  const mergedReminders = [
+    ...reminders,
+    ...syncedReminders.filter(r => !firestoreTitles.has(r.title)),
+  ];
+  const dueRem      = mergedReminders.filter(r => !r.completed && r.dueDate && r.dueDate <= today);
+  const upcomingRem = mergedReminders.filter(r => !r.completed && (!r.dueDate || r.dueDate > today)).slice(0, 4);
+  const overdueBills = bills.filter(b => !b.paid && b.dueDate <= today);
+  const unpaidBills  = bills.filter(b => !b.paid);
+  const birthdays   = contacts
     .filter(c => c.birthday)
-    .map(c => ({ ...c, dbu: dbu(c.birthday) }))
-    .filter(c => c.dbu !== null && c.dbu <= 14)
-    .sort((a, b) => a.dbu - b.dbu);
+    .map(c => ({ ...c, days: dbu(c.birthday) }))
+    .filter(c => c.days !== null && c.days <= 30)
+    .sort((a, b) => a.days - b.days);
 
-  const todayReminders = reminders.filter(r => !r.completed && r.dueDate <= tod());
-  const allEvents      = [...events, ...icalEvents];
-  const todayEvents    = allEvents.filter(e => e.date === tod()).sort((a,b) => (a.time||"") < (b.time||"") ? -1 : 1);
-  const overdueBills   = bills.filter(b => !b.paid && b.dueDate <= tod());
-  const openTasks      = householdTasks.filter(t => !t.done);
-  const hasApiKey      = !!getApiKey();
+  const todayDinner = weekDinners?.days?.[new Date().toLocaleDateString("en-US", { weekday: "long" })];
+  const hasApiKey   = !!getApiKey();
+
+  // Hide the module-level top-bar on home (we use the mission strip instead)
+  const topBar = document.getElementById("top-bar");
+  if (topBar) topBar.classList.add("hidden");
 
   _container.innerHTML = `
-    <div class="module-content">
+    <div style="padding: var(--space-5); max-width: 1200px; margin: 0 auto;">
 
-      <!-- ── Greeting ─────────────────────────────────────── -->
-      <div style="margin-bottom: var(--space-5)">
-        <div style="font-size: var(--text-3xl); font-weight: 800; color: var(--text-primary); line-height: 1.1">
-          ${greeting()}, Michael.
+      <!-- Greeting row -->
+      <div style="margin-bottom: var(--space-5); display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4);">
+        <div>
+          <div style="font-family:'Space Grotesk',sans-serif; font-size: 28px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; line-height: 1.1;">
+            ${greeting()}, Michael.
+          </div>
+          <div style="font-size: var(--text-sm); color: var(--text-secondary); margin-top: 4px;">
+            ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+          </div>
         </div>
-        <div style="font-size: var(--text-md); color: var(--text-secondary); margin-top: var(--space-1)">
-          ${todayLabel()}
+        <div style="display:flex;gap:var(--space-3);flex-shrink:0;">
+          ${statPill("📅", todayEvents.length, "today", "#FF3B30")}
+          ${statPill("✓", dueRem.length, "due", "#FF9500")}
+          ${statPill("💰", overdueBills.length, "overdue", "#EF4444")}
+          ${statPill("🎂", birthdays.filter(b => b.days <= 14).length, "bdays", "#00D4FF")}
         </div>
       </div>
 
-      <!-- ── Stat bar ──────────────────────────────────────── -->
-      <div class="stat-grid" style="margin-bottom: var(--space-5)">
-        ${statCard("👥", contacts.length, "Contacts")}
-        ${tonightStatCard(weekDinners)}
-        ${statCard("🎂", birthdays.length, "Bdays soon", birthdays.length > 0 ? "var(--color-crm)" : null)}
-        ${statCard("⏰", todayReminders.length, "Reminders due", todayReminders.length > 0 ? "var(--color-red)" : null)}
-        ${statCard("📅", todayEvents.length, "Events today")}
-        ${statCard("💰", overdueBills.length, "Bills due", overdueBills.length > 0 ? "var(--color-red)" : null)}
-      </div>
+      <!-- Bento grid -->
+      <div class="bento">
 
-      <!-- ── Main cards ─────────────────────────────────────── -->
-      <div style="display: flex; flex-direction: column; gap: var(--space-4)">
+        <!-- Debrief — spans full width -->
+        ${debriefTile(hasApiKey)}
 
-        ${debriefCard()}
-        ${nudgesCard(nudges)}
-        ${birthdaysCard(birthdays)}
-        ${todayEventsCard(todayEvents, reminders)}
-        ${financePulseCard(bills, overdueBills)}
-        ${familyCard(familyMembers)}
-        ${householdCard(openTasks)}
-        ${!hasApiKey ? apiKeyPrompt() : ""}
+        <!-- Row 1: Schedule (left 8) + Weather (right 4) -->
+        <div class="snap-tile bento-8 snap-tile--clickable" data-nav="calendar" style="min-height:280px;">
+          ${tileHeader("📅", "Today's Schedule", "Full calendar")}
+          <div class="snap-tile__body" style="padding:0;">
+            ${calendarTileBody(todayEvents)}
+          </div>
+        </div>
+
+        <div class="snap-tile bento-4" style="min-height:280px;">
+          ${tileHeader("🌤", "Weather", "7-day")}
+          <div class="snap-tile__body" style="padding:var(--space-4);">
+            ${weatherTileBody()}
+          </div>
+        </div>
+
+        <!-- Row 2: Tasks (6) + CRM (6) -->
+        <div class="snap-tile bento-6 snap-tile--clickable" data-nav="reminders">
+          ${tileHeader("✓", "Tasks & Reminders", "All")}
+          <div class="snap-tile__body" style="padding:0;">
+            ${remindersTileBody(dueRem, upcomingRem)}
+          </div>
+        </div>
+
+        <div class="snap-tile bento-6 snap-tile--clickable" data-nav="crm">
+          ${tileHeader("👥", "Inner Circle", "Open")}
+          <div class="snap-tile__body">
+            ${crmTileBody(contacts, birthdays)}
+          </div>
+        </div>
+
+        <!-- Row 3: Finance (4) + Meals (4) + Family (4) -->
+        <div class="snap-tile bento-4 snap-tile--clickable" data-nav="finances">
+          ${tileHeader("💰", "Finance Snapshot", "Details")}
+          <div class="snap-tile__body">
+            ${financeTileBody(unpaidBills, overdueBills)}
+          </div>
+        </div>
+
+        <div class="snap-tile bento-4 snap-tile--clickable" ${todayDinner ? 'data-open-dinner' : 'data-nav="meals"'}>
+          ${tileHeader("🍽️", "Tonight's Dinner", "Meals")}
+          <div class="snap-tile__body">
+            ${mealsTileBody(todayDinner)}
+          </div>
+        </div>
+
+        <div class="snap-tile bento-4 snap-tile--clickable" data-nav="household">
+          ${tileHeader("🏠", "Household", "All tasks")}
+          <div class="snap-tile__body">
+            ${householdTileBody(householdTasks)}
+          </div>
+        </div>
+
+        ${!hasApiKey ? apiKeyTile() : ""}
 
       </div>
 
@@ -137,38 +195,304 @@ function render() {
   bindEvents();
 }
 
-// ── Card builders ───────────────────────────────────────────────
+// ── Tile builders ───────────────────────────────────────────────
 
-const _esc = s => String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;");
-
-// Compact stat-grid card for tonight's dinner — tap to pop the full recipe
-function tonightStatCard(weekDinners) {
-  const today = new Date().toLocaleDateString("en-US", { weekday: "long" });
-  const d = weekDinners?.days?.[today];
-  if (!d || !d.name) {
-    return `
-      <div class="stat-card" style="cursor:pointer" data-plan-dinner>
-        <div class="stat-card__icon">🍽️</div>
-        <div class="stat-card__value" style="font-size:var(--text-md);line-height:1.2;color:var(--text-tertiary)">Not set</div>
-        <div class="stat-card__label">Tonight's dinner</div>
-      </div>
-    `;
-  }
+function statPill(icon, count, label, color) {
+  if (!count) return "";
   return `
-    <div class="stat-card" style="cursor:pointer" data-open-dinner-modal>
-      <div class="stat-card__icon">🍽️</div>
-      <div class="stat-card__value" style="font-size:var(--text-md);line-height:1.2">${_esc(d.name)} ${d.freezable?"❄️":""}</div>
-      <div class="stat-card__label">Tonight's dinner</div>
+    <div style="display:flex;flex-direction:column;align-items:center;gap:2px;
+      background:${color}18;border:1px solid ${color}30;border-radius:var(--radius-md);
+      padding:var(--space-2) var(--space-3);min-width:52px;">
+      <div style="font-size:var(--text-lg);font-weight:800;color:${color}">${count}</div>
+      <div style="font-size:9px;font-weight:700;text-transform:uppercase;color:${color};letter-spacing:.06em">${icon} ${label}</div>
     </div>
   `;
 }
 
-// Full recipe popup, shown on Home
+function tileHeader(icon, label, cta) {
+  return `
+    <div class="snap-tile__header">
+      <div class="snap-tile__title">${icon} ${label}</div>
+      <span class="snap-tile__arrow">→</span>
+    </div>
+  `;
+}
+
+function calendarTileBody(todayEvents) {
+  // If nothing today, show next upcoming events across all sources
+  const S = _ctx ? _ctx.state() : {};
+  let displayEvents = todayEvents;
+  if (!displayEvents.length) {
+    const today = tod();
+    const allFuture = [...(S.events || []), ...(S.syncedEvents || []), ..._icalEvents]
+      .filter(e => e.date > today)
+      .sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : (a.time || "") < (b.time || "") ? -1 : 1);
+    // Deduplicate
+    const seen = new Set();
+    displayEvents = allFuture.filter(e => {
+      const key = `${e.date}|${e.title}`;
+      if (seen.has(key)) return false;
+      seen.add(key); return true;
+    }).slice(0, 5);
+  }
+
+  if (!displayEvents.length) {
+    return `<div style="padding:var(--space-5);text-align:center;color:var(--text-secondary);font-size:var(--text-sm)">🎉 Nothing on the calendar</div>`;
+  }
+
+  const today = tod();
+  return displayEvents.map(e => {
+    const color = e.color || "var(--accent)";
+    const isUpcoming = e.date !== today;
+    const dateLabel = isUpcoming
+      ? new Date(e.date + "T12:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
+      : (e.time ? fmt12(e.time) : "All day");
+    return `
+      <div style="display:flex;align-items:center;gap:var(--space-3);padding:10px var(--space-4);border-bottom:1px solid var(--separator);">
+        <div style="width:3px;min-height:28px;border-radius:2px;background:${color};flex-shrink:0;align-self:stretch;"></div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:var(--text-sm);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(e.title)}</div>
+          <div style="font-size:var(--text-xs);color:var(--text-secondary);">${dateLabel}${e.location ? " · " + _esc(e.location) : ""}</div>
+        </div>
+        ${isUpcoming ? `<div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-tertiary);flex-shrink:0;">${e.date.slice(5)}</div>` : ""}
+      </div>
+    `;
+  }).join("");
+}
+
+function remindersTileBody(due, upcoming) {
+  if (!due.length && !upcoming.length) {
+    return `<div style="padding:var(--space-5);text-align:center;color:var(--text-secondary);font-size:var(--text-sm)">✅ All clear!</div>`;
+  }
+  const items = [...due.map(r => ({ ...r, _overdue: true })), ...upcoming].slice(0, 6);
+  return items.map(r => `
+    <div style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-4);border-bottom:1px solid var(--separator);">
+      <div style="width:7px;height:7px;border-radius:50%;background:${r._overdue ? "var(--color-red)" : "var(--color-orange)"};flex-shrink:0;"></div>
+      <div style="flex:1;min-width:0;font-size:var(--text-sm);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+        ${_esc(r.title)}
+      </div>
+      ${r._overdue ? `<span style="font-size:9px;font-weight:700;color:var(--color-red);text-transform:uppercase;">Due</span>` : ""}
+    </div>
+  `).join("");
+}
+
+function crmTileBody(contacts, birthdays) {
+  return `
+    <div style="display:flex;gap:var(--space-5);align-items:flex-start;">
+      <div style="text-align:center;">
+        <div style="font-size:36px;font-weight:800;color:var(--accent);line-height:1;">${contacts.length}</div>
+        <div style="font-size:var(--text-xs);color:var(--text-secondary);font-weight:600;">People</div>
+      </div>
+      <div style="flex:1;min-width:0;">
+        ${birthdays.length ? `
+          <div style="font-size:var(--text-xs);font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.06em;margin-bottom:var(--space-2);">Upcoming 🎂</div>
+          ${birthdays.slice(0, 3).map(c => {
+            const col = c.days === 0 ? "var(--color-red)" : c.days <= 7 ? "var(--color-orange)" : "var(--accent)";
+            return `
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-1);">
+                <div style="font-size:var(--text-sm);font-weight:600;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_esc(c.fname)} ${_esc(c.lname)}</div>
+                <div style="font-size:var(--text-xs);font-weight:700;color:${col};flex-shrink:0;margin-left:var(--space-2);">
+                  ${c.days === 0 ? "Today!" : c.days === 1 ? "Tomorrow" : c.days + "d"}
+                </div>
+              </div>
+            `;
+          }).join("")}
+        ` : `<div style="font-size:var(--text-sm);color:var(--text-secondary);">No birthdays in next 30 days 🎉</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function financeTileBody(unpaid, overdue) {
+  if (!unpaid.length && !overdue.length) {
+    return `<div style="text-align:center;color:var(--text-secondary);font-size:var(--text-sm);">Add bills & budget to get started.</div>`;
+  }
+  const totalDue = unpaid.reduce((s, b) => s + (b.amount || 0), 0);
+  return `
+    <div style="display:flex;gap:var(--space-5);align-items:center;">
+      <div style="text-align:center;">
+        <div style="font-size:28px;font-weight:800;color:${overdue.length ? "var(--color-red)" : "var(--color-green)"};line-height:1;">
+          $${totalDue.toFixed(0)}
+        </div>
+        <div style="font-size:var(--text-xs);color:var(--text-secondary);font-weight:600;">${unpaid.length} pending</div>
+      </div>
+      ${overdue.length ? `
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:var(--text-xs);font-weight:700;color:var(--color-red);text-transform:uppercase;letter-spacing:.06em;margin-bottom:var(--space-2);">⚠️ Overdue</div>
+          ${overdue.slice(0, 3).map(b => `
+            <div style="font-size:var(--text-sm);font-weight:600;color:var(--text-primary);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+              ${_esc(b.name)} — $${b.amount}
+            </div>
+          `).join("")}
+        </div>
+      ` : `<div style="font-size:var(--text-sm);color:var(--color-green);font-weight:600;">✅ All current</div>`}
+    </div>
+  `;
+}
+
+function mealsTileBody(dinner) {
+  if (!dinner) {
+    return `<div style="text-align:center;color:var(--text-secondary);font-size:var(--text-sm);">No dinner planned tonight.<br><span style="color:var(--accent);font-weight:600;">Tap to plan →</span></div>`;
+  }
+  const macros = [dinner.protein ? `🥩 ${_esc(dinner.protein)}` : "", dinner.calories ? `🔥 ${_esc(dinner.calories)}` : ""].filter(Boolean).join(" · ");
+  return `
+    <div>
+      <div style="font-size:var(--text-lg);font-weight:700;color:var(--text-primary);margin-bottom:4px;">
+        ${_esc(dinner.name)} ${dinner.freezable ? "❄️" : ""}
+      </div>
+      ${macros ? `<div style="font-size:var(--text-xs);color:var(--color-orange);font-weight:600;">${macros}</div>` : ""}
+      ${dinner.prepTime ? `<div style="font-size:var(--text-xs);color:var(--text-secondary);margin-top:4px;">⏱ ${_esc(dinner.prepTime)}</div>` : ""}
+      <div style="font-size:var(--text-xs);color:var(--accent);margin-top:var(--space-2);font-weight:600;">Tap to see recipe →</div>
+    </div>
+  `;
+}
+
+function familyTileBody(members) {
+  if (!members.length) {
+    return `<div style="text-align:center;color:var(--text-secondary);font-size:var(--text-sm);">Set up your Family OS →</div>`;
+  }
+  return `
+    <div style="display:flex;gap:var(--space-3);flex-wrap:wrap;">
+      ${members.map(m => `
+        <div style="text-align:center;min-width:48px;">
+          <div style="width:40px;height:40px;border-radius:50%;background:${m.color || "#AF52DE"}22;color:${m.color || "#AF52DE"};
+            display:flex;align-items:center;justify-content:center;font-size:18px;margin:0 auto var(--space-1);">
+            ${m.emoji || m.name[0]}
+          </div>
+          <div style="font-size:var(--text-xs);font-weight:600;color:var(--text-secondary);">${_esc(m.name)}</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function weatherTileBody() {
+  if (!_wx) {
+    return `<div style="text-align:center;color:var(--text-secondary);font-size:var(--text-sm);padding:var(--space-4) 0;">
+      <span class="spinner-sm" style="margin-bottom:var(--space-2);display:block;margin:0 auto var(--space-2);"></span>
+      Loading weather…
+    </div>`;
+  }
+  const { tempF, desc, emoji, wind, daily = [] } = _wx;
+  const dayForecast = daily.slice(1, 5); // skip today, show next 4 days
+  return `
+    <div>
+      <!-- Big temp -->
+      <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3);">
+        <div style="font-size:44px;line-height:1;">${emoji}</div>
+        <div>
+          <div style="font-family:'Space Grotesk',sans-serif;font-size:52px;font-weight:700;color:var(--text-primary);line-height:1;letter-spacing:-0.03em;">${tempF}°</div>
+          <div style="font-size:var(--text-sm);color:var(--text-secondary);margin-top:2px;">${desc}</div>
+        </div>
+      </div>
+      <!-- Wind -->
+      <div style="font-size:var(--text-xs);color:var(--text-secondary);margin-bottom:var(--space-4);">
+        💨 ${wind} mph
+      </div>
+      <!-- 4-day forecast -->
+      ${dayForecast.length ? `
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--space-2);border-top:1px solid var(--separator);padding-top:var(--space-3);">
+          ${dayForecast.map(d => `
+            <div style="text-align:center;">
+              <div style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text-tertiary);margin-bottom:4px;">${d.day}</div>
+              <div style="font-size:18px;margin-bottom:4px;">${d.emoji}</div>
+              <div style="font-size:var(--text-xs);font-weight:700;color:var(--text-primary);">${d.hi}°</div>
+              <div style="font-size:var(--text-xs);color:var(--text-secondary);">${d.lo}°</div>
+            </div>
+          `).join("")}
+        </div>
+      ` : ""}
+    </div>
+  `;
+}
+
+function householdTileBody(tasks) {
+  const open = tasks.filter(t => !t.done);
+  const urgent = open.filter(t => t.priority === "high");
+  if (!open.length) {
+    return `<div style="text-align:center;color:var(--text-secondary);font-size:var(--text-sm);">✅ No open tasks</div>`;
+  }
+  return `
+    <div style="display:flex;gap:var(--space-4);align-items:center;">
+      <div style="text-align:center;">
+        <div style="font-size:32px;font-weight:800;color:${urgent.length ? "var(--color-orange)" : "var(--text-primary)"};line-height:1;">${open.length}</div>
+        <div style="font-size:var(--text-xs);color:var(--text-secondary);font-weight:600;">open tasks</div>
+      </div>
+      <div style="flex:1;min-width:0;">
+        ${urgent.slice(0, 3).map(t => `
+          <div style="font-size:var(--text-sm);font-weight:600;color:var(--color-orange);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+            🔧 ${_esc(t.title)}
+          </div>
+        `).join("")}
+        ${!urgent.length ? `<div style="font-size:var(--text-sm);color:var(--text-secondary);">Nothing urgent 👍</div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function debriefTile(hasApiKey) {
+  if (_debrief.loading) {
+    return `
+      <div class="snap-tile bento-12" style="border-color:var(--accent);background:var(--accent-light);min-height:auto;">
+        <div style="padding:var(--space-4);display:flex;align-items:center;gap:var(--space-3);">
+          <span class="spinner-sm"></span>
+          <span style="font-size:var(--text-sm);color:var(--accent);font-weight:600;">Preparing your daily briefing…</span>
+        </div>
+      </div>`;
+  }
+  if (_debrief.error || !_debrief.text) {
+    if (!hasApiKey) return apiKeyTile();
+    return `
+      <div class="snap-tile bento-12" style="min-height:auto;">
+        <div style="padding:var(--space-3) var(--space-4);display:flex;align-items:center;justify-content:space-between;gap:var(--space-3);">
+          <div style="font-size:var(--text-sm);color:var(--text-secondary);">☀️ Daily debrief — ${_debrief.error === "no_key" ? "add an API key below" : "failed to load"}</div>
+          <button class="btn btn-primary btn-sm" id="regen-debrief">↻ Retry</button>
+        </div>
+      </div>`;
+  }
+
+  const html = _debrief.text.split("\n").map(line => {
+    const t = line.trim();
+    if (!t) return "";
+    if (/^[☀️📅✅🌤💬🗓]/.test(t)) {
+      return `<span style="font-weight:700;color:var(--text-primary);margin-right:var(--space-4);white-space:nowrap;">${t}</span>`;
+    }
+    return `<span style="color:var(--text-secondary);font-size:var(--text-sm);">${t}</span>`;
+  }).filter(Boolean).join(" &nbsp;·&nbsp; ");
+
+  return `
+    <div class="snap-tile bento-12" style="border-color:var(--accent);background:var(--accent-light);min-height:auto;">
+      <div style="padding:var(--space-3) var(--space-5);display:flex;align-items:center;gap:var(--space-4);">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);flex-shrink:0;">☀️ Debrief</div>
+        <div style="flex:1;min-width:0;font-size:var(--text-sm);line-height:1.5;overflow:hidden;">${html}</div>
+        <button class="btn btn-ghost btn-sm" id="regen-debrief" style="flex-shrink:0;font-size:11px;color:var(--text-tertiary);">↻</button>
+      </div>
+    </div>`;
+}
+
+function apiKeyTile() {
+  return `
+    <div class="snap-tile bento-12" style="border-color:var(--color-orange);min-height:auto;">
+      <div style="padding:var(--space-4) var(--space-5);">
+        <div style="font-weight:700;margin-bottom:var(--space-2);">✨ Enable AI features</div>
+        <div style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--space-3);">
+          Add your Anthropic API key to unlock AI-drafted texts, gift ideas, and daily briefings.
+        </div>
+        <div style="display:flex;gap:var(--space-2);max-width:480px;">
+          <input id="api-key-input" class="input" placeholder="sk-ant-…" style="font-size:var(--text-sm);">
+          <button class="btn btn-primary" id="save-api-key">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Dinner modal (recipe popup) ─────────────────────────────────
 function renderDinnerModal(weekDinners) {
   const today = new Date().toLocaleDateString("en-US", { weekday: "long" });
   const d = weekDinners?.days?.[today];
   if (!d) return "";
-  const macros = [d.protein?`🥩 ${_esc(d.protein)}`:"", d.calories?`🔥 ${_esc(d.calories)}`:""].filter(Boolean).join(" · ");
+  const macros = [d.protein ? `🥩 ${_esc(d.protein)}` : "", d.calories ? `🔥 ${_esc(d.calories)}` : ""].filter(Boolean).join(" · ");
   const badges = [
     d.freezable ? `<span class="pill" style="background:#E3F2FD;color:#1565C0">❄️ Freezer-friendly</span>` : "",
     d.servings ? `<span class="pill" style="background:var(--bg-surface-2);color:var(--text-secondary)">makes ${_esc(d.servings)}</span>` : "",
@@ -180,42 +504,39 @@ function renderDinnerModal(weekDinners) {
     <div class="modal-overlay">
       <div class="modal" style="max-width:560px">
         <div class="modal-header">
-          <h2 style="font-size:var(--text-lg)">${_esc(d.name)}</h2>
-          <button class="btn btn-ghost btn-sm" id="dinner-modal-close">✕</button>
+          <h2>${_esc(d.name)}</h2>
+          <button class="btn btn-ghost btn-sm" id="dinner-close">✕</button>
         </div>
         <div class="modal-body">
-          ${badges?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:var(--space-2)">${badges}</div>`:""}
-          ${macros?`<div style="font-size:var(--text-sm);font-weight:700;color:var(--color-orange);margin-bottom:var(--space-3)">${macros}</div>`:""}
-          ${d.storage?`<div style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--space-3)">🧊 ${_esc(d.storage)}</div>`:""}
-
-          ${(d.ingredients&&d.ingredients.length)?`
+          ${badges ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">${badges}</div>` : ""}
+          ${macros ? `<div style="font-size:var(--text-sm);font-weight:700;color:var(--color-orange);">${macros}</div>` : ""}
+          ${d.storage ? `<div style="font-size:var(--text-sm);color:var(--text-secondary);">🧊 ${_esc(d.storage)}</div>` : ""}
+          ${(d.ingredients && d.ingredients.length) ? `
             <div class="section-title" style="margin-bottom:var(--space-2)">Ingredients</div>
-            <ul style="margin:0 0 var(--space-4) 0;padding-left:1.1rem;font-size:var(--text-sm);line-height:1.7">
-              ${d.ingredients.map(i=>`<li>${_esc(i)}</li>`).join("")}
+            <ul style="margin:0;padding-left:1.1rem;font-size:var(--text-sm);line-height:1.7">
+              ${d.ingredients.map(i => `<li>${_esc(i)}</li>`).join("")}
             </ul>
-          `:""}
-
+          ` : ""}
           <div class="section-title" style="margin-bottom:var(--space-2)">Directions</div>
           ${_dinnerModal.loading ? `
-            <div style="display:flex;align-items:center;gap:var(--space-2);color:var(--text-secondary);font-size:var(--text-sm);padding:var(--space-3) 0">
+            <div style="display:flex;align-items:center;gap:var(--space-2);color:var(--text-secondary);font-size:var(--text-sm);">
               <span class="spinner-sm"></span> Writing the recipe…
             </div>
           ` : hasSteps ? `
             <ol style="margin:0;padding-left:1.2rem;font-size:var(--text-sm);line-height:1.7">
-              ${d.steps.map(s=>`<li style="margin-bottom:6px">${_esc(s)}</li>`).join("")}
+              ${d.steps.map(s => `<li style="margin-bottom:6px">${_esc(s)}</li>`).join("")}
             </ol>
           ` : `<div style="font-size:var(--text-sm);color:var(--text-tertiary)">No directions yet.</div>`}
         </div>
         <div class="modal-footer">
-          <button class="btn btn-ghost btn-sm" data-plan-dinner>🍽️ Change</button>
-          <button class="btn btn-primary" id="dinner-modal-done">Done</button>
+          <button class="btn btn-ghost btn-sm" data-nav="meals">🍽️ Plan meals</button>
+          <button class="btn btn-primary" id="dinner-done">Done</button>
         </div>
       </div>
     </div>
   `;
 }
 
-// Open the recipe popup; lazy-generate directions (and persist) if missing
 async function openDinnerModal() {
   _dinnerModal.open = true;
   _dinnerModal.loading = false;
@@ -226,377 +547,49 @@ async function openDinnerModal() {
     _dinnerModal.loading = true; render();
     const detail = await generateRecipeDetail(d, "family");
     if (detail && Array.isArray(detail.steps)) {
-      const merged = {
-        ...d, steps: detail.steps,
+      const merged = { ...d, steps: detail.steps,
         ingredients: (d.ingredients && d.ingredients.length) ? d.ingredients : (detail.ingredients || []),
-        storage: detail.storage || d.storage || "",
-        prepTime: detail.prepTime || d.prepTime || "",
-        servings: d.servings || detail.servings || "",
-        freezable: d.freezable ?? detail.freezable ?? false,
-      };
+        storage: detail.storage || d.storage || "", prepTime: detail.prepTime || d.prepTime || "",
+        servings: d.servings || detail.servings || "", freezable: d.freezable ?? detail.freezable ?? false };
       const days = { ...(wd.days || {}), [today]: merged };
       const { setState } = await import("../js/state.js");
-      setState({ weekDinners: { ...wd, days } });   // optimistic — render shows steps now
-      dbSet(refs.weekDinners(), { id: "weekDinners", days }).catch(() => {});  // persist (cache)
+      setState({ weekDinners: { ...wd, days } });
+      dbSet(refs.weekDinners(), { id: "weekDinners", days }).catch(() => {});
     }
     _dinnerModal.loading = false; render();
-  } else {
-    render();
-  }
-}
-
-function debriefCard() {
-  if (_debrief.loading) {
-    return `
-      <div class="card" style="border:1.5px solid var(--accent);background:var(--accent-light)">
-        <div style="padding:var(--space-5);text-align:center">
-          <div style="font-size:var(--text-sm);color:var(--accent);font-weight:600;animation:pulse 1.5s infinite">
-            ☀️ Command Central is preparing today's briefing…
-          </div>
-        </div>
-      </div>`;
-  }
-  if (_debrief.error) {
-    const msg = _debrief.error === "no_key"
-      ? "☀️ Daily debrief requires an Anthropic API key — add it below."
-      : "☀️ Debrief failed — check your API key or network, then retry.";
-    return `
-      <div class="card" style="border:1.5px solid var(--separator)">
-        <div style="padding:var(--space-4);display:flex;align-items:center;justify-content:space-between;gap:var(--space-3)">
-          <div style="font-size:var(--text-sm);color:var(--text-secondary)">${msg}</div>
-          <button class="btn btn-primary btn-sm" id="regen-debrief">↻ Retry</button>
-        </div>
-      </div>`;
-  }
-  if (!_debrief.text) return "";
-
-  // Render debrief text — preserve line breaks, bold section headers
-  const html = _debrief.text
-    .split("\n")
-    .map(line => {
-      const trimmed = line.trim();
-      if (!trimmed) return "";
-      // Section headers start with an emoji
-      if (/^[☀️📅✅🌤💬]/.test(trimmed)) {
-        return `<div style="font-weight:700;font-size:var(--text-sm);margin-top:var(--space-3);margin-bottom:var(--space-1);color:var(--text-primary)">${trimmed}</div>`;
-      }
-      return `<div style="font-size:var(--text-sm);color:var(--text-secondary);line-height:1.6;padding-left:var(--space-3)">${trimmed}</div>`;
-    })
-    .join("");
-
-  return `
-    <div class="card" style="border:1.5px solid var(--accent);background:var(--accent-light)">
-      <div style="padding:var(--space-4)">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-2)">
-          <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">Daily Debrief</div>
-          <button class="btn btn-ghost btn-sm" id="regen-debrief" style="font-size:11px;color:var(--text-tertiary)">↻ Refresh</button>
-        </div>
-        ${html}
-      </div>
-    </div>`;
-}
-
-function statCard(icon, value, label, accentColor) {
-  return `
-    <div class="stat-card">
-      <div class="stat-card__icon">${icon}</div>
-      <div class="stat-card__value" style="${accentColor ? `color: ${accentColor}` : ""}">
-        ${value}
-      </div>
-      <div class="stat-card__label">${label}</div>
-    </div>
-  `;
-}
-
-function nudgesCard(nudges) {
-  if (!nudges.length) return "";
-  return `
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">👋 Reach out</div>
-        <button class="btn btn-ghost btn-sm" data-nav="crm">See all →</button>
-      </div>
-      ${nudges.slice(0, 4).map(c => {
-        const days = daysSince(c.lastContact);
-        const ratio = days / (c.nudgeDays || 30);
-        const [col, bg] = ratio >= 1.5 ? ["var(--color-red)", "var(--color-red-bg)"]
-                        : ratio >= 0.8 ? ["var(--color-orange)", "var(--color-orange-bg)"]
-                        : ["var(--color-green)", "var(--color-green-bg)"];
-        return `
-          <div class="list-row list-row--clickable" data-open-contact="${c.id}">
-            <div class="avatar avatar-md" style="background:${c.color}22;color:${c.color}">${ini(c)}</div>
-            <div style="flex:1;min-width:0">
-              <div style="font-weight:700;font-size:var(--text-md)">${c.fname} ${c.lname}</div>
-              <span class="pill" style="background:${bg};color:${col}">
-                ${days === 999 ? "Never contacted" : days + "d ago"}
-              </span>
-            </div>
-            <button class="btn btn-sm" style="background:var(--color-green);color:#fff" data-open-contact="${c.id}">
-              Text 💬
-            </button>
-          </div>
-        `;
-      }).join("")}
-    </div>
-  `;
-}
-
-function birthdaysCard(birthdays) {
-  if (!birthdays.length) return "";
-  return `
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">🎂 Upcoming birthdays</div>
-        <button class="btn btn-ghost btn-sm" data-nav="crm">All →</button>
-      </div>
-      ${birthdays.map(c => {
-        const isToday = c.dbu === 0;
-        const col = isToday ? "var(--color-red)" : c.dbu <= 7 ? "var(--color-orange)" : "var(--color-crm)";
-        return `
-          <div class="list-row list-row--clickable" data-open-contact="${c.id}">
-            <div class="avatar avatar-md" style="background:${c.color}22;color:${c.color}">${ini(c)}</div>
-            <div style="flex:1;min-width:0">
-              <div style="font-weight:700">${c.fname} ${c.lname}</div>
-              <div style="font-size:var(--text-sm);color:var(--text-secondary)">
-                ${new Date(c.birthday + "T12:00:00").toLocaleDateString("en-US",{month:"long",day:"numeric"})}
-              </div>
-            </div>
-            <div style="font-weight:800;color:${col};font-size:var(--text-sm)">
-              ${isToday ? "🎉 Today!" : c.dbu === 1 ? "Tomorrow" : "In " + c.dbu + "d"}
-            </div>
-          </div>
-        `;
-      }).join("")}
-    </div>
-  `;
-}
-
-function todayEventsCard(events, reminders) {
-  const dueReminders = reminders.filter(r => !r.completed && r.dueDate <= tod());
-  if (!events.length && !dueReminders.length) {
-    return `
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">📅 Today's schedule</div>
-          <button class="btn btn-ghost btn-sm" data-nav="calendar">Calendar →</button>
-        </div>
-        <div style="padding: var(--space-5); text-align: center;">
-          <div style="font-size: 28px; margin-bottom: var(--space-2)">🎉</div>
-          <div style="color: var(--text-secondary); font-size: var(--text-sm)">
-            Nothing scheduled — clear day!
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  return `
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">📅 Today</div>
-        <button class="btn btn-ghost btn-sm" data-nav="calendar">Calendar →</button>
-      </div>
-      ${events.map(e => `
-        <div class="list-row">
-          <div style="width:4px;height:36px;border-radius:2px;background:${e.color||"var(--accent)"};flex-shrink:0"></div>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:var(--text-sm)">${e.title}</div>
-            <div style="font-size:var(--text-xs);color:var(--text-secondary)">
-              ${e.time ? fmt12(e.time) : "All day"}${e.location ? " · " + e.location : ""}
-            </div>
-          </div>
-        </div>
-      `).join("")}
-      ${dueReminders.slice(0,3).map(r => `
-        <div class="list-row">
-          <div style="width:4px;height:36px;border-radius:2px;background:var(--color-orange);flex-shrink:0"></div>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:var(--text-sm)">⏰ ${r.title}</div>
-            <div style="font-size:var(--text-xs);color:var(--color-orange)">Reminder due</div>
-          </div>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
-function financePulseCard(bills, overdueBills) {
-  if (!bills.length) {
-    return `
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">💰 Finances</div>
-          <button class="btn btn-ghost btn-sm" data-nav="finances">Set up →</button>
-        </div>
-        <div style="padding: var(--space-4); text-align:center; color: var(--text-secondary); font-size: var(--text-sm)">
-          Track bills, subscriptions, and budget here.
-          <br><br>
-          <button class="btn btn-primary btn-sm" data-nav="finances">Get started</button>
-        </div>
-      </div>
-    `;
-  }
-  const unpaid = bills.filter(b => !b.paid);
-  const totalDue = unpaid.reduce((s, b) => s + (b.amount || 0), 0);
-  return `
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">💰 Finance pulse</div>
-        <button class="btn btn-ghost btn-sm" data-nav="finances">Details →</button>
-      </div>
-      <div style="padding: var(--space-4); display: flex; gap: var(--space-4)">
-        <div style="flex:1; text-align:center">
-          <div style="font-size:var(--text-2xl);font-weight:800;color:${overdueBills.length > 0 ? "var(--color-red)" : "var(--text-primary)"}">
-            $${totalDue.toFixed(0)}
-          </div>
-          <div style="font-size:var(--text-xs);color:var(--text-secondary)">${unpaid.length} bills pending</div>
-        </div>
-        ${overdueBills.length > 0 ? `
-          <div style="flex:1; text-align:center">
-            <div style="font-size:var(--text-2xl);font-weight:800;color:var(--color-red)">${overdueBills.length}</div>
-            <div style="font-size:var(--text-xs);color:var(--color-red)">Overdue</div>
-          </div>
-        ` : ""}
-      </div>
-      ${overdueBills.slice(0,2).map(b => `
-        <div class="list-row" style="padding-top:var(--space-2);padding-bottom:var(--space-2)">
-          <span style="font-size:14px">⚠️</span>
-          <div style="flex:1;font-size:var(--text-sm)">
-            <span style="font-weight:600">${b.name}</span>
-            <span style="color:var(--color-red)"> — $${b.amount} overdue</span>
-          </div>
-        </div>
-      `).join("")}
-    </div>
-  `;
-}
-
-function familyCard(members) {
-  if (!members.length) {
-    return `
-      <div class="card">
-        <div class="card-header">
-          <div class="card-title">👨‍👩‍👧‍👦 Family OS</div>
-          <button class="btn btn-ghost btn-sm" data-nav="family">Set up →</button>
-        </div>
-        <div style="padding: var(--space-4); color: var(--text-secondary); font-size: var(--text-sm); text-align:center">
-          Add your family members — wife, kids, pets —
-          <br>and manage schedules in one place.
-          <br><br>
-          <button class="btn btn-primary btn-sm" data-nav="family">Set up Family OS</button>
-        </div>
-      </div>
-    `;
-  }
-  return `
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">👨‍👩‍👧‍👦 Family</div>
-        <button class="btn btn-ghost btn-sm" data-nav="family">Details →</button>
-      </div>
-      <div style="display:flex;gap:var(--space-3);padding:var(--space-4);flex-wrap:wrap">
-        ${members.map(m => `
-          <div style="text-align:center;min-width:56px">
-            <div class="avatar avatar-md" style="margin:0 auto var(--space-1);background:${m.color||"#007AFF"}22;color:${m.color||"#007AFF"}">
-              ${m.emoji || m.name[0]}
-            </div>
-            <div style="font-size:var(--text-xs);font-weight:600;color:var(--text-secondary)">${m.name}</div>
-            ${m.note ? `<div style="font-size:10px;color:var(--text-tertiary)">${m.note}</div>` : ""}
-          </div>
-        `).join("")}
-      </div>
-    </div>
-  `;
-}
-
-function householdCard(tasks) {
-  const urgent = tasks.filter(t => t.priority === "high" || t.overdue);
-  if (!tasks.length) return "";
-  return `
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">🏠 Household</div>
-        <button class="btn btn-ghost btn-sm" data-nav="household">All tasks →</button>
-      </div>
-      ${urgent.slice(0,3).map(t => `
-        <div class="list-row">
-          <span>🔧</span>
-          <div style="flex:1;font-size:var(--text-sm)">
-            <div style="font-weight:600">${t.title}</div>
-            ${t.dueDate ? `<div style="font-size:var(--text-xs);color:var(--color-orange)">Due ${t.dueDate}</div>` : ""}
-          </div>
-        </div>
-      `).join("")}
-      ${!urgent.length ? `
-        <div style="padding:var(--space-4);text-align:center;color:var(--text-secondary);font-size:var(--text-sm)">
-          ${tasks.length} tasks — nothing urgent 👍
-        </div>
-      ` : ""}
-    </div>
-  `;
-}
-
-function apiKeyPrompt() {
-  return `
-    <div class="card" style="border: 1.5px solid var(--color-orange)">
-      <div style="padding: var(--space-4)">
-        <div style="font-weight:700;margin-bottom:var(--space-2)">✨ Enable AI features</div>
-        <div style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--space-3)">
-          Add your Anthropic API key to unlock AI-drafted texts, gift ideas, and morning briefs.
-        </div>
-        <div style="display:flex;gap:var(--space-2)">
-          <input id="api-key-input" class="input" placeholder="sk-ant-..." style="font-size:var(--text-sm)">
-          <button class="btn btn-primary" id="save-api-key">Save</button>
-        </div>
-      </div>
-    </div>
-  `;
+  } else { render(); }
 }
 
 // ── Event binding ───────────────────────────────────────────────
 function bindEvents() {
   if (!_container) return;
 
-  // Navigate to module
-  _container.querySelectorAll("[data-nav]").forEach(btn => {
-    btn.addEventListener("click", e => {
-      e.stopPropagation();
-      _ctx.navigate(btn.dataset.nav);
-    });
-  });
-
-  // Tonight's dinner → pop the full recipe right here on Home
-  _container.querySelectorAll("[data-open-dinner-modal]").forEach(el => {
-    el.addEventListener("click", e => { e.stopPropagation(); openDinnerModal(); });
-  });
-  const dinnerClose = _container.querySelector("#dinner-modal-close");
-  if (dinnerClose) dinnerClose.addEventListener("click", () => { _dinnerModal.open = false; render(); });
-  const dinnerDone = _container.querySelector("#dinner-modal-done");
-  if (dinnerDone) dinnerDone.addEventListener("click", () => { _dinnerModal.open = false; render(); });
-
-  // Plan / change tonight's dinner → Meals "This Week" view
-  _container.querySelectorAll("[data-plan-dinner]").forEach(el => {
+  _container.querySelectorAll("[data-nav]").forEach(el => {
     el.addEventListener("click", e => {
       e.stopPropagation();
-      _dinnerModal.open = false;
-      sessionStorage.setItem("meals_view", "week");
-      _ctx.navigate("meals");
+      _ctx.navigate(el.dataset.nav);
     });
   });
 
-  // Debrief refresh
+  _container.querySelectorAll("[data-open-dinner]").forEach(el => {
+    el.addEventListener("click", e => { e.stopPropagation(); openDinnerModal(); });
+  });
+
+  const dinnerClose = _container.querySelector("#dinner-close, #dinner-done");
+  if (dinnerClose) dinnerClose.addEventListener("click", () => { _dinnerModal.open = false; render(); });
+  const dinnerDone = _container.querySelector("#dinner-done");
+  if (dinnerDone) dinnerDone.addEventListener("click", () => { _dinnerModal.open = false; render(); });
+
   const regenBtn = _container.querySelector("#regen-debrief");
   if (regenBtn) {
     regenBtn.addEventListener("click", () => {
       localStorage.removeItem(`debrief_${tod()}`);
-      const state = _ctx.state();
-      const allEvents = [...(state.events||[]), ...(state.icalEvents||[])];
-      const todayEv = allEvents.filter(e => e.date === tod()).sort((a,b) => (a.time||"") < (b.time||"") ? -1 : 1);
-      generateDebrief(todayEv, state.reminders || []);
+      const S = _ctx.state();
+      const all = [...(S.events || []), ...(S.syncedEvents || [])];
+      generateDebrief(all.filter(e => e.date === tod()), S.reminders || []);
     });
   }
 
-  // Save API key
   const saveBtn = _container.querySelector("#save-api-key");
   if (saveBtn) {
     saveBtn.addEventListener("click", () => {
@@ -605,35 +598,23 @@ function bindEvents() {
         import("../js/ai.js").then(ai => {
           ai.setApiKey(key);
           showToast("API key saved ✓");
-          const state = _ctx.state();
-          const allEvents = [...(state.events||[]), ...(state.icalEvents||[])];
-          const todayEv = allEvents.filter(e => e.date === tod()).sort((a,b) => (a.time||"") < (b.time||"") ? -1 : 1);
-          _debrief.date = null; // force regeneration
-          generateDebrief(todayEv, state.reminders || []);
+          _debrief.date = null;
+          const S = _ctx.state();
+          const all = [...(S.events || []), ...(S.syncedEvents || [])];
+          generateDebrief(all.filter(e => e.date === tod()), S.reminders || []);
         });
       }
     });
   }
-
-  // Open contact detail — navigate to CRM module with contact pre-selected
-  _container.querySelectorAll("[data-open-contact]").forEach(el => {
-    el.addEventListener("click", () => {
-      const id = el.dataset.openContact;
-      // Store the pending contact ID and navigate
-      sessionStorage.setItem("crm_open_contact", id);
-      _ctx.navigate("crm");
-    });
-  });
 }
 
 function showToast(msg) {
-  const container = document.getElementById("toast-container");
-  if (!container) return;
-  const toast = document.createElement("div");
-  toast.className = "toast";
-  toast.textContent = msg;
-  container.appendChild(toast);
-  setTimeout(() => toast.remove(), 3000);
+  const c = document.getElementById("toast-container");
+  if (!c) return;
+  const t = document.createElement("div");
+  t.className = "toast"; t.textContent = msg;
+  c.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
 }
 
 // ── Module exports ──────────────────────────────────────────────
@@ -644,30 +625,50 @@ export async function init(container, ctx) {
   const { subscribe } = await import("../js/state.js");
   const u = subscribe(state => {
     render();
-    // Trigger debrief once icalEvents arrive (if not already generated today)
-    if (_debrief.date !== tod() && !_debrief.loading && state.icalEvents?.length >= 0 && getApiKey()) {
-      const allEvents = [...(state.events||[]), ...(state.icalEvents||[])];
-      const todayEv = allEvents.filter(e => e.date === tod()).sort((a,b) => (a.time||"") < (b.time||"") ? -1 : 1);
-      generateDebrief(todayEv, state.reminders || []);
+    if (_debrief.date !== tod() && !_debrief.loading && getApiKey()) {
+      const all = [...(state.events || []), ...(state.syncedEvents || [])];
+      generateDebrief(all.filter(e => e.date === tod()), state.reminders || []);
     }
   });
   _unsubscribes.push(u);
 
   render();
 
-  // Generate debrief immediately if API key exists
+  // Fetch calendar events from bridge (same source the Calendar module uses)
+  fetchIcalEvents().then(evs => {
+    if (!evs || !evs.length) return;
+    _icalEvents = evs;
+    render();
+  }).catch(() => {});
+
+  // Fetch weather (geolocation) — re-render when it arrives
+  fetchWeatherDetail().then(wx => {
+    if (!wx) return;
+    _wx = wx;
+    render();
+    // Also update mission strip weather
+    const icon = document.getElementById("ms-weather-icon");
+    const temp = document.getElementById("ms-weather-temp");
+    if (icon) icon.textContent = wx.emoji;
+    if (temp) temp.textContent = `${wx.tempF}° ${wx.desc}`;
+  });
+
   if (getApiKey() && _debrief.date !== tod()) {
-    const state = ctx.state();
-    const allEvents = [...(state.events||[]), ...(state.icalEvents||[])];
-    const todayEv = allEvents.filter(e => e.date === tod()).sort((a,b) => (a.time||"") < (b.time||"") ? -1 : 1);
-    generateDebrief(todayEv, state.reminders || []);
+    const S = ctx.state();
+    const all = [...(S.events || []), ...(S.syncedEvents || [])];
+    generateDebrief(all.filter(e => e.date === tod()), S.reminders || []);
   }
 }
 
 export function cleanup() {
+  const topBar = document.getElementById("top-bar");
+  if (topBar) topBar.classList.remove("hidden");
+
   _unsubscribes.forEach(u => u?.());
   _unsubscribes = [];
   _dinnerModal = { open: false, loading: false };
+  _wx = null;
+  _icalEvents = [];
   _container = null;
   _ctx = null;
 }

@@ -10,30 +10,19 @@ const moduleView    = document.getElementById("module-view");
 const pageHeading   = document.getElementById("page-heading");
 const topbarActions = document.getElementById("topbar-actions");
 const liveClock     = document.getElementById("live-clock");
+const msDate        = document.getElementById("ms-date");
 const syncDot       = document.getElementById("sync-dot");
-const themeBtn      = document.getElementById("theme-btn");
+const topBar        = document.getElementById("top-bar");
 
-// ── Theme ─────────────────────────────────────────────────────
-function applyTheme(theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-  document.getElementById("theme-icon").textContent = theme === "dark" ? "☀️" : "🌙";
-  localStorage.setItem("os_theme", theme);
-}
+// Dark mode only — no theme toggle needed
+document.documentElement.setAttribute("data-theme", "dark");
 
-function getTheme() {
-  return localStorage.getItem("os_theme") ||
-    (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-}
-
-themeBtn.addEventListener("click", () => {
-  const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
-  applyTheme(next);
-});
-
-// ── Clock ──────────────────────────────────────────────────────
+// ── Clock + date ───────────────────────────────────────────────
 function updateClock() {
   const now = new Date();
-  liveClock.textContent = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  if (liveClock) liveClock.textContent = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  if (msDate) msDate.innerHTML =
+    now.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
 }
 setInterval(updateClock, 1000);
 updateClock();
@@ -43,17 +32,17 @@ function buildNav() {
   const modules = getAllModules();
   const current = getCurrentModule();
 
-  // Desktop sidebar
+  // Desktop sidebar (icon-only, 64px)
   navList.innerHTML = modules.map(m => `
     <li>
       <button
         class="nav-item ${m.id === current ? "nav-item--active" : ""}"
         data-module="${m.id}"
         aria-current="${m.id === current ? "page" : "false"}"
-        title="${m.desc}"
+        title="${m.name} — ${m.desc}"
       >
         <span class="nav-item__icon">${m.icon}</span>
-        <span class="nav-item__label">${m.name}</span>
+        <span class="nav-item__label">${m.shortName || m.name.slice(0, 5)}</span>
       </button>
     </li>
   `).join("");
@@ -190,13 +179,13 @@ function parseSync(raw, type) {
 
 function setSyncStatus(status) {
   if (!syncDot) return;
-  syncDot.className = `sync-dot sync-dot--${status}`;
-  syncDot.title = { synced: "Live sync", saving: "Saving…", error: "Sync error" }[status] || "";
+  syncDot.className = `ms-pulse ms-pulse--${status === "synced" ? "" : status}`.trim();
+  const label = document.getElementById("sync-label");
+  if (label) label.textContent = { synced: "Live", saving: "Saving…", error: "Sync error" }[status] || "Live";
 }
 
 // ── Boot ───────────────────────────────────────────────────────
 async function boot() {
-  applyTheme(getTheme());
 
   // Wire up router
   onModuleChange((id, meta) => activateModule(id, meta));
