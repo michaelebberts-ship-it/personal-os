@@ -695,30 +695,14 @@ async function sendToAI(text) {
   renderSheet();
 
   try {
-    const { getApiKey } = await import("../js/ai.js");
-    const key = getApiKey();
-    const { AI_MODEL } = await import("../js/config.js");
+    const { callAI } = await import("../js/ai.js");
+    // Build message history for multi-turn (callAI accepts an array)
+    const messages = _ai.msgs.map(m => ({ role: m.role, content: m.text }));
+    const full = await callAI(messages, { maxTokens: 1024, system: buildContext() });
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-client-side-api-key-access": "true",
-      },
-      body: JSON.stringify({
-        model: AI_MODEL,
-        max_tokens: 1024,
-        system: buildContext(),
-        messages: _ai.msgs.map(m => ({ role: m.role, content: m.text })),
-      }),
-    });
+    if (!full) throw new Error("No response from Claude");
 
-    const data = await res.json();
-    const full = data.content?.[0]?.text || "Sorry, something went wrong.";
-
-    // Split reply from actions
+    // Split reply from actions block
     const actionSplit = full.indexOf("\nACTIONS:");
     const replyText = actionSplit > -1 ? full.slice(0, actionSplit).trim() : full.trim();
     const actionBlock = actionSplit > -1 ? full.slice(actionSplit + 9).trim() : null;
