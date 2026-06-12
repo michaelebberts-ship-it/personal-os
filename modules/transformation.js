@@ -187,6 +187,9 @@ const MEAL_SHORTCUTS = [
   { label: 'Yogurt',  g: 20 },
 ];
 
+// Set to true the moment the user makes any local change — blocks Firestore overwrite
+let _localDirty = false;
+
 // ── State ──────────────────────────────────────────────────────
 const S = {
   weight: 200, checks: {}, protein: 0,
@@ -257,8 +260,11 @@ async function txLoadFirestore() {
     // Only load if Firestore has today's / this week's data
     if (fsDateKey === todayKey()) {
       if (f.weight?.doubleValue)   S.weight  = f.weight.doubleValue;
-      if (f.protein?.integerValue) S.protein = parseInt(f.protein.integerValue);
-      if (f.checks?.stringValue)   S.checks  = JSON.parse(f.checks.stringValue);
+      // Only override user-mutated fields if the user hasn't made changes this session
+      if (!_localDirty) {
+        if (f.protein?.integerValue) S.protein = parseInt(f.protein.integerValue);
+        if (f.checks?.stringValue)   S.checks  = JSON.parse(f.checks.stringValue);
+      }
       if (f.pullup?.stringValue)   S.pullup  = JSON.parse(f.pullup.stringValue);
     }
     if (fsWeekKey === weekKey()) {
@@ -861,7 +867,7 @@ function handleClick(e) {
   else if (action === 'add-protein')  { S.protein = Math.max(0, S.protein + parseInt(el.dataset.amount)); txSave(); render(); return; }
   else if (action === 'pullup')   { S.pullup[el.dataset.key] = Math.max(0, S.pullup[el.dataset.key] + parseInt(el.dataset.delta)); txSave(); render(); return; }
   else if (action === 'recovery') { S.recovery[el.dataset.key] = Math.max(0, S.recovery[el.dataset.key] + parseInt(el.dataset.delta)); txSave(); render(); return; }
-  else if (action === 'check')    { const id=el.dataset.id; S.checks[id]=!S.checks[id]; txSave(); render(); return; }
+  else if (action === 'check')    { const id=el.dataset.id; S.checks[id]=!S.checks[id]; _localDirty=true; txSave(); render(); return; }
   else if (action === 'day')      { const idx=parseInt(el.dataset.idx); S.weekDone[idx]=!S.weekDone[idx]; txSave(); render(); return; }
   else if (action === 'tab')      { S.activeTab=el.dataset.key; render(); return; }
   else if (action === 'chart-tab'){ S.activeChart=el.dataset.chart; render(); return; }
@@ -869,7 +875,7 @@ function handleClick(e) {
   else if (action === 'toggle-sleep')   { _ouraExpanded=!_ouraExpanded; render(); return; }
   else if (action === 'sleep-insight')  { generateSleepInsight(); return; }
   else if (action === 'ai-insight')     { generateInsight(el.dataset.key); return; }
-  else if (action === 'reset-day')  { if(confirm("Reset today's checklist and protein?")){ S.checks={}; S.protein=0; txSave(); render(); } return; }
+  else if (action === 'reset-day')  { if(confirm("Reset today's checklist and protein?")){ S.checks={}; S.protein=0; _localDirty=true; txSave(); render(); } return; }
   else if (action === 'export')   { doExport(); }
   else if (action === 'import')   { doImport(); }
 
@@ -1381,6 +1387,7 @@ export async function init(container, ctx) {
 export function cleanup() {
   clearInterval(_interval);
   _interval = null;
+  _localDirty = false;
   stopOuraPolling();
   _container = null;
   _ctx = null;
