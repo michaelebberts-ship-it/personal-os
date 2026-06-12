@@ -1093,14 +1093,9 @@ function fmtTime(iso) {
 function contribBar(label, val) {
   if (val == null) return '';
   const color = val >= 85 ? 'var(--color-green)' : val >= 70 ? GOLD : 'var(--color-red)';
-  return `<div style="margin-bottom:5px">
-    <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px">
-      <span style="color:var(--text-secondary)">${label}</span>
-      <span style="font-weight:700;color:${color}">${val}</span>
-    </div>
-    <div style="height:3px;background:var(--bg-surface-2);border-radius:2px;overflow:hidden">
-      <div style="height:100%;width:${val}%;background:${color};border-radius:2px"></div>
-    </div>
+  return `<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0">
+    <span style="font-size:11px;color:var(--text-secondary)">${label}</span>
+    <span style="font-size:12px;font-weight:700;color:${color}">${val}</span>
   </div>`;
 }
 
@@ -1143,7 +1138,7 @@ function renderOuraTile() {
   const sleepContrib  = o.sleep_contributors || {};
   const readyContrib  = o.readiness_contributors || {};
   const actContrib    = o.activity_contributors || {};
-  const workouts      = o.workouts || [];
+  const workouts      = Array.isArray(o.workouts) ? o.workouts : [];
   const trend         = Array.isArray(o.trend_7day) ? o.trend_7day : [];
   const ins           = _ouraInsight;
 
@@ -1282,42 +1277,48 @@ function renderOuraTile() {
 
           <!-- Sleep contributors -->
           ${Object.keys(sleepContrib).length ? `
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:6px">Sleep Contributors</div>
-            ${contribBar('Deep Sleep',  sleepContrib.deep_sleep)}
-            ${contribBar('REM Sleep',   sleepContrib.rem_sleep)}
-            ${contribBar('Efficiency',  sleepContrib.efficiency)}
-            ${contribBar('Restfulness', sleepContrib.restfulness)}
-            ${contribBar('Timing',      sleepContrib.timing)}
-            ${contribBar('Total Sleep', sleepContrib.total_sleep)}
-            ${contribBar('Latency',     sleepContrib.latency)}
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:4px">Sleep Contributors</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px">
+              ${contribBar('Deep Sleep',  sleepContrib.deep_sleep)}
+              ${contribBar('REM Sleep',   sleepContrib.rem_sleep)}
+              ${contribBar('Efficiency',  sleepContrib.efficiency)}
+              ${contribBar('Restfulness', sleepContrib.restfulness)}
+              ${contribBar('Timing',      sleepContrib.timing)}
+              ${contribBar('Total Sleep', sleepContrib.total_sleep)}
+              ${contribBar('Latency',     sleepContrib.latency)}
+            </div>
           ` : ''}
         </div>
 
         <!-- Readiness contributors -->
         ${Object.keys(readyContrib).length ? `
-          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:6px">Readiness Contributors</div>
-            ${contribBar('HRV Balance',          readyContrib.hrv_balance)}
-            ${contribBar('Resting Heart Rate',   readyContrib.resting_heart_rate)}
-            ${contribBar('Body Temperature',     readyContrib.body_temperature)}
-            ${contribBar('Previous Night',       readyContrib.previous_night)}
-            ${contribBar('Sleep Balance',        readyContrib.sleep_balance)}
-            ${contribBar('Activity Balance',     readyContrib.activity_balance)}
-            ${contribBar('Recovery Index',       readyContrib.recovery_index)}
-            ${contribBar('Sleep Regularity',     readyContrib.sleep_regularity)}
+          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--separator)">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:4px">Readiness Contributors</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px">
+              ${contribBar('HRV Balance',        readyContrib.hrv_balance)}
+              ${contribBar('Resting HR',         readyContrib.resting_heart_rate)}
+              ${contribBar('Body Temp',          readyContrib.body_temperature)}
+              ${contribBar('Previous Night',     readyContrib.previous_night)}
+              ${contribBar('Sleep Balance',      readyContrib.sleep_balance)}
+              ${contribBar('Activity Balance',   readyContrib.activity_balance)}
+              ${contribBar('Recovery Index',     readyContrib.recovery_index)}
+              ${contribBar('Sleep Regularity',   readyContrib.sleep_regularity)}
+            </div>
           </div>
         ` : ''}
 
         <!-- Activity contributors -->
         ${Object.keys(actContrib).length ? `
-          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:6px">Activity Contributors</div>
-            ${contribBar('Stay Active',         actContrib.stay_active)}
-            ${contribBar('Move Every Hour',     actContrib.move_every_hour)}
-            ${contribBar('Training Volume',     actContrib.training_volume)}
-            ${contribBar('Training Frequency',  actContrib.training_frequency)}
-            ${contribBar('Meet Daily Targets',  actContrib.meet_daily_targets)}
-            ${contribBar('Recovery Time',       actContrib.recovery_time)}
+          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--separator)">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:4px">Activity Contributors</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px">
+              ${contribBar('Stay Active',        actContrib.stay_active)}
+              ${contribBar('Move Every Hour',    actContrib.move_every_hour)}
+              ${contribBar('Training Volume',    actContrib.training_volume)}
+              ${contribBar('Training Frequency', actContrib.training_frequency)}
+              ${contribBar('Meet Daily Targets', actContrib.meet_daily_targets)}
+              ${contribBar('Recovery Time',      actContrib.recovery_time)}
+            </div>
           </div>
         ` : ''}
 
