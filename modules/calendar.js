@@ -84,10 +84,24 @@ async function fetchIcal() {
     const { setState } = await import("../js/state.js");
     setState({ icalEvents: _local.icalEvents, calLastSync: _local.icalLastFetch });
   } catch (e) {
-    // Bridge unreachable (e.g. on iPhone away from Mac) — show Firestore-synced events silently
+    // Bridge unreachable (e.g. on iPhone) — load from Firestore sync/calendar
     const bridgeDown = e.name === 'AbortError' || e.message.includes('Failed to fetch') || e.message.includes('NetworkError') || e.message.includes('Load failed');
-    if (!bridgeDown) _local.icalError = e.message;
-    _local.icalEvents = _ctx.state().events || [];
+    if (bridgeDown) {
+      try {
+        const fsRes = await fetch(`https://firestore.googleapis.com/v1/projects/inner-circle-crm/databases/(default)/documents/users/owner-inner-circle-crm/sync/calendar?key=AIzaSyDINHNV1Ze3QfhXwBPwe22LnUe-xxnU-n4`);
+        if (fsRes.ok) {
+          const doc = await fsRes.json();
+          const raw = doc.fields?.data?.stringValue || '';
+          _local.icalEvents = raw.split('\n').filter(Boolean).map((line, i) => {
+            const [title, date, time, endTime, location, calendar] = line.split('|||');
+            return { id: `fs_ev_${i}_${date}`, title: title||'', date: date||'', time: time||'', endTime: endTime||'', location: location||'', calendar: calendar||'iCloud', source: 'apple' };
+          });
+          _local.icalLastFetch = doc.fields?.lastSync?.timestampValue || null;
+        }
+      } catch { /* silent */ }
+    } else {
+      _local.icalError = e.message;
+    }
   } finally {
     _local.icalLoading = false;
     render();
