@@ -1039,77 +1039,8 @@ function scoreColor(n) {
 }
 
 function renderAppleHealthTile() {
-  const h = _health;
-  if (!h || !h.ok) {
-    const msg = !h ? 'Connecting…' :
-      h.error === 'binary_missing' ? 'Bridge needs restart — health reader is ready.' :
-      h.error?.includes('timeout') ? 'Open Terminal → run <code style="color:var(--accent)">./fetch_health_data</code> → allow Health access → restart bridge.' :
-      (h.error || 'Waiting for data…');
-    return `
-      <div class="txm-card txm-oura-card">
-        <h2>Apple Health <span class="txm-badge">Activity</span></h2>
-        <div style="padding:14px 0;text-align:center;color:var(--text-tertiary);font-size:13px">${msg}</div>
-      </div>`;
-  }
-
-  const steps   = h.steps_today   != null ? Math.round(h.steps_today).toLocaleString() : '—';
-  const cals    = h.calories_active_today   != null ? Math.round(h.calories_active_today)   : null;
-  const exMin   = h.exercise_minutes_today  != null ? Math.round(h.exercise_minutes_today)  : null;
-  const stand   = h.stand_hours_today       != null ? Math.round(h.stand_hours_today)        : null;
-  const weight  = h.weight_lbs  != null ? h.weight_lbs.toFixed(1) + ' lbs' : null;
-  const vo2     = h.vo2_max     != null ? h.vo2_max.toFixed(1) : null;
-
-  // Mini step chart — 7 days
-  const days7 = h.steps_7day || [];
-  const maxSteps = Math.max(...days7.map(d => d.steps), 1);
-  const GOAL = 10000;
-  const chartBars = days7.map(d => {
-    const pct  = Math.round((d.steps / maxSteps) * 100);
-    const hit  = d.steps >= GOAL;
-    const color = hit ? 'var(--color-green)' : d.steps > 5000 ? GOLD : 'var(--color-red)';
-    const dayLabel = d.date ? new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'narrow' }) : '';
-    return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1">
-      <div style="width:100%;height:40px;display:flex;align-items:flex-end">
-        <div style="width:100%;height:${pct}%;background:${color};border-radius:3px 3px 0 0;min-height:2px;transition:height .3s"></div>
-      </div>
-      <div style="font-size:9px;color:var(--text-tertiary)">${dayLabel}</div>
-    </div>`;
-  }).join('');
-
-  const statBox = (icon, val, label, color = 'var(--text-primary)') => val != null ? `
-    <div style="background:var(--bg-surface-2);border-radius:10px;padding:10px 8px;text-align:center">
-      <div style="font-size:10px;margin-bottom:3px">${icon}</div>
-      <div style="font-size:18px;font-weight:800;color:${color};font-family:'Space Grotesk',sans-serif;line-height:1">${val}</div>
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);margin-top:3px">${label}</div>
-    </div>` : '';
-
-  const stepColor = h.steps_today >= GOAL ? 'var(--color-green)' : h.steps_today >= 6000 ? GOLD : 'var(--color-red)';
-
-  return `
-    <div class="txm-card txm-oura-card">
-      <h2>Apple Health <span style="font-size:10px;color:var(--text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">${h.date || ''}</span> ${aiBtn('health')}</h2>
-
-      <!-- Steps + mini chart -->
-      <div style="display:flex;gap:12px;align-items:center;margin:12px 0">
-        <div style="flex-shrink:0;text-align:center">
-          <div style="font-size:28px;font-weight:800;color:${stepColor};font-family:'Space Grotesk',sans-serif;line-height:1">${steps}</div>
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);margin-top:3px">Steps today</div>
-          <div style="font-size:10px;color:${stepColor};margin-top:2px">${h.steps_today >= GOAL ? '✓ Goal' : 'Goal: 10k'}</div>
-        </div>
-        <div style="flex:1;display:flex;gap:3px;align-items:flex-end;height:56px">${chartBars}</div>
-      </div>
-
-      <!-- Activity stats grid -->
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
-        ${statBox('🔥', cals != null ? cals + ' kcal' : null, 'Active Cal', 'var(--color-red)')}
-        ${statBox('⏱️', exMin != null ? exMin + ' min' : null, 'Exercise', 'var(--color-green)')}
-        ${statBox('🧍', stand != null ? stand + ' hrs' : null, 'Stand', 'var(--accent)')}
-        ${statBox('💨', vo2 != null ? vo2 : null, 'VO2 Max', GOLD)}
-      </div>
-
-      ${weight ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--separator);font-size:12px;color:var(--text-secondary)">⚖️ Health weight: <strong style="color:var(--text-primary)">${weight}</strong>${h.weight_date ? ` <span style="color:var(--text-tertiary)">(${h.weight_date})</span>` : ''}</div>` : ''}
-      ${aiSection('health')}
-    </div>`;
+  // Apple Health is now merged into the Oura tile — nothing to render separately
+  return '';
 }
 
 async function generateSleepInsight() {
@@ -1122,16 +1053,19 @@ async function generateSleepInsight() {
   const healthLine = h?.ok ? `
 Yesterday's activity: ${h.steps_today ?? '—'} steps, ${h.calories_active_today ?? '—'} active kcal, ${h.exercise_minutes_today ?? '—'} min exercise, ${h.stand_hours_today ?? '—'} stand hours. VO2 Max: ${h.vo2_max ?? '—'}.` : '';
 
-  const prompt = `You are a health coach giving Michael a plain-English interpretation of his sleep and activity data. Be direct, specific, and actionable. 3-4 sentences max.
+  const contrib = o.sleep_contributors || {};
+  const rContrib = o.readiness_contributors || {};
+  const prompt = `You are a health coach giving Michael a plain-English interpretation of his Oura ring data. Be direct, specific, and actionable. 4-5 sentences max.
 
-Sleep data (${o.date || 'last night'}):
-- Sleep Score: ${o.sleep_score ?? '—'} | Readiness: ${o.readiness_score ?? '—'}
-- Total: ${secToHM(o.total_sleep_sec)} | Deep: ${secToHM(o.deep_sleep_sec)} | REM: ${secToHM(o.rem_sleep_sec)}
-- HRV: ${o.avg_hrv ?? '—'} ms | Resting HR: ${o.resting_hr ?? '—'} bpm
-- Contributors: Deep ${contrib.deep_sleep ?? '—'}, REM ${contrib.rem_sleep ?? '—'}, Efficiency ${contrib.efficiency ?? '—'}, Restfulness ${contrib.restfulness ?? '—'}, Timing ${contrib.timing ?? '—'}
+Date: ${o.date || 'last night'}
+SLEEP: Score ${o.sleep_score ?? '—'} | Total ${secToHM(o.total_sleep_sec)} | Deep ${secToHM(o.deep_sleep_sec)} | REM ${secToHM(o.rem_sleep_sec)} | Efficiency ${o.sleep_efficiency ?? '—'}% | Bedtime ${fmtTime(o.bedtime_start)}–${fmtTime(o.bedtime_end)}
+VITALS: HRV ${o.avg_hrv ?? '—'} ms | Resting HR ${o.resting_hr ?? '—'} bpm | SpO2 ${o.spo2_avg ?? '—'}% | Breathing disturbance index ${o.breathing_disturbance_idx ?? '—'} | Temp deviation ${o.temperature_deviation ?? '—'}°
+READINESS: Score ${o.readiness_score ?? '—'} | HRV balance ${rContrib.hrv_balance ?? '—'} | Recovery index ${rContrib.recovery_index ?? '—'}
+ACTIVITY: Score ${o.activity_score ?? '—'} | Steps ${o.steps ?? '—'} | Active cal ${o.active_calories ?? '—'} | High intensity ${o.high_activity_min ?? '—'}m | Sedentary ${o.sedentary_min ?? '—'}m
+STRESS: ${o.stress_summary ?? '—'} | Stress ${o.stress_high_min ?? '—'}m | Recovery ${o.recovery_high_min ?? '—'}m
 ${healthLine}
 
-What does this mean for Michael today? Connect sleep quality to his energy and readiness for training. Highlight 1-2 strengths and 1 thing to improve. Natural paragraph, no bullet points.`;
+What does this data mean for Michael today? Connect the dots across sleep, recovery, and activity. Highlight 1-2 strengths and 1 clear thing to improve. Natural paragraph, no bullet points.`;
 
   try {
     const { callAI } = await import('../js/ai.js');
@@ -1143,116 +1077,277 @@ What does this mean for Michael today? Connect sleep quality to his energy and r
   render();
 }
 
+function fmtTime(iso) {
+  if (!iso) return '—';
+  const t = iso.includes('T') ? iso.split('T')[1]?.slice(0,5) : iso.slice(0,5);
+  if (!t) return '—';
+  const [h, m] = t.split(':').map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2,'0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+
+function contribBar(label, val) {
+  if (val == null) return '';
+  const color = val >= 85 ? 'var(--color-green)' : val >= 70 ? GOLD : 'var(--color-red)';
+  return `<div style="margin-bottom:5px">
+    <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:2px">
+      <span style="color:var(--text-secondary)">${label}</span>
+      <span style="font-weight:700;color:${color}">${val}</span>
+    </div>
+    <div style="height:3px;background:var(--bg-surface-2);border-radius:2px;overflow:hidden">
+      <div style="height:100%;width:${val}%;background:${color};border-radius:2px"></div>
+    </div>
+  </div>`;
+}
+
+function miniStatBox(icon, val, label, color) {
+  if (val == null) return '';
+  return `<div style="background:var(--bg-surface-2);border-radius:10px;padding:10px 8px;text-align:center">
+    <div style="font-size:11px;margin-bottom:2px">${icon}</div>
+    <div style="font-size:16px;font-weight:800;color:${color};font-family:'Space Grotesk',sans-serif;line-height:1">${val}</div>
+    <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);margin-top:2px">${label}</div>
+  </div>`;
+}
+
 function renderOuraTile() {
   const o = _oura;
   if (!o) {
     return `
       <div class="txm-card txm-oura-card">
-        <h2>Last Night's Sleep <span class="txm-badge">Oura</span></h2>
+        <h2>Body Stats <span class="txm-badge">Oura Ring</span></h2>
         <div style="padding:20px 0;text-align:center;color:var(--text-tertiary);font-size:13px">
-          Waiting for bridge… start <code style="color:var(--accent)">serve_os.py</code> to sync Oura data.
+          Waiting for bridge… start <code style="color:var(--accent)">serve_os.py</code>
         </div>
       </div>`;
   }
 
   const sleepScore    = o.sleep_score ?? null;
   const readyScore    = o.readiness_score ?? null;
-  const totalSleep    = secToHM(o.total_sleep_sec);
-  const deepSleep     = secToHM(o.deep_sleep_sec);
-  const remSleep      = secToHM(o.rem_sleep_sec);
-  const hrv           = o.avg_hrv ? `${o.avg_hrv} ms` : '—';
-  const restingHR     = o.resting_hr ? `${o.resting_hr} bpm` : '—';
-  const contrib       = o.sleep_contributors || {};
+  const actScore      = o.activity_score ?? null;
+  const hrv           = o.avg_hrv != null ? `${o.avg_hrv}` : '—';
+  const restHR        = o.resting_hr != null ? `${o.resting_hr}` : '—';
+  const spo2          = o.spo2_avg != null ? `${o.spo2_avg}%` : null;
+  const tempDev       = o.temperature_deviation != null ? `${o.temperature_deviation > 0 ? '+' : ''}${o.temperature_deviation.toFixed(2)}°` : null;
+  const steps         = o.steps != null ? o.steps.toLocaleString() : '—';
+  const stepsColor    = (o.steps||0) >= 10000 ? 'var(--color-green)' : (o.steps||0) >= 6000 ? GOLD : 'var(--color-red)';
+  const activeCal     = o.active_calories != null ? `${o.active_calories}` : null;
+  const totalCal      = o.total_calories != null ? `${o.total_calories}` : null;
+  const stressLabel   = { normal: '😌 Normal', high: '😤 High', low: '😴 Low', restored: '✨ Restored' }[o.stress_summary] || o.stress_summary || null;
+  const stressColor   = { normal: 'var(--color-green)', high: 'var(--color-red)', low: 'var(--accent)', restored: GOLD }[o.stress_summary] || 'var(--text-secondary)';
+  const bdi           = o.breathing_disturbance_idx;
+  const bdiColor      = bdi == null ? 'var(--text-tertiary)' : bdi <= 5 ? 'var(--color-green)' : bdi <= 15 ? GOLD : 'var(--color-red)';
+  const sleepContrib  = o.sleep_contributors || {};
+  const readyContrib  = o.readiness_contributors || {};
+  const actContrib    = o.activity_contributors || {};
+  const workouts      = o.workouts || [];
+  const trend         = o.trend_7day || [];
+  const ins           = _ouraInsight;
 
-  const contribBar = (label, val) => {
-    if (val == null) return '';
-    const color = val >= 85 ? 'var(--color-green)' : val >= 70 ? GOLD : 'var(--color-red)';
-    return `<div style="margin-bottom:6px">
-      <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">
-        <span style="color:var(--text-secondary)">${label}</span>
-        <span style="font-weight:700;color:${color}">${val}</span>
+  // 7-day trend bars
+  const trendChart = trend.length ? `
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">7-Day Trend</div>
+      <div style="display:flex;gap:4px;align-items:flex-end;height:60px">
+        ${trend.map(d => {
+          const dayLbl = d.day ? new Date(d.day+'T12:00:00').toLocaleDateString('en-US',{weekday:'narrow'}) : '';
+          const avg = [d.sleep, d.readiness, d.activity].filter(v=>v!=null);
+          const score = avg.length ? Math.round(avg.reduce((a,b)=>a+b,0)/avg.length) : null;
+          const pct = score ? Math.round(score) : 0;
+          const col = score >= 85 ? 'var(--color-green)' : score >= 70 ? GOLD : 'var(--color-red)';
+          return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
+            <div style="font-size:8px;color:var(--text-tertiary);font-weight:700">${score ?? '—'}</div>
+            <div style="width:100%;flex:1;display:flex;align-items:flex-end">
+              <div style="width:100%;height:${pct}%;background:${col};border-radius:3px 3px 0 0;min-height:2px"></div>
+            </div>
+            <div style="font-size:8px;color:var(--text-tertiary)">${dayLbl}</div>
+          </div>`;
+        }).join('')}
       </div>
-      <div style="height:4px;background:var(--bg-surface-2);border-radius:2px;overflow:hidden">
-        <div style="height:100%;width:${val}%;background:${color};border-radius:2px;transition:width .4s ease"></div>
+      <div style="display:flex;gap:12px;margin-top:6px;justify-content:center">
+        ${trend.length ? `
+          <span style="font-size:9px;color:var(--color-green)">● Sleep</span>
+          <span style="font-size:9px;color:${GOLD}">● Ready</span>
+          <span style="font-size:9px;color:var(--accent)">● Activity</span>
+        ` : ''}
       </div>
-    </div>`;
-  };
+    </div>` : '';
 
-  const ins = _ouraInsight;
+  // Workouts list
+  const workoutList = workouts.length ? `
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">Recent Workouts</div>
+      ${workouts.slice(0,5).map(w => {
+        const name = (w.activity||'').replace(/([A-Z])/g,' $1').replace(/_/g,' ').trim();
+        const nameCapd = name.charAt(0).toUpperCase() + name.slice(1);
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--separator)">
+          <div>
+            <div style="font-size:12px;font-weight:700;color:var(--text-primary)">${nameCapd}</div>
+            <div style="font-size:10px;color:var(--text-tertiary)">${w.day || ''}</div>
+          </div>
+          <div style="text-align:right;font-size:11px;color:var(--text-secondary)">
+            ${w.duration_min ? `${w.duration_min} min` : ''}
+            ${w.calories ? ` · ${w.calories} kcal` : ''}
+            ${w.distance_km > 0.1 ? ` · ${w.distance_km} km` : ''}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : '';
 
   return `
     <div class="txm-card txm-oura-card">
-      <!-- Header row — click chevron to expand -->
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
-        <h2 style="margin:0">Last Night's Sleep <span style="font-size:10px;color:var(--text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">${o.date || ''}</span></h2>
-        <button data-txm="toggle-sleep" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:18px;padding:4px;line-height:1" title="${_ouraExpanded?'Collapse':'Expand'}">
-          ${_ouraExpanded ? '▲' : '▽'}
-        </button>
+
+      <!-- Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h2 style="margin:0">Body Stats
+          <span style="font-size:10px;color:var(--text-tertiary);font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">${o.date || ''}</span>
+        </h2>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${aiBtn('sleep')}
+          <button data-txm="toggle-sleep" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:16px;padding:4px;line-height:1">
+            ${_ouraExpanded ? '▲' : '▽'}
+          </button>
+        </div>
       </div>
 
-      <!-- Always-visible: 4 score tiles -->
-      <div class="txm-oura-scores">
+      <!-- 3 top scores -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
         <div class="txm-oura-score-box">
           <div class="txm-oura-score-num" style="color:${scoreColor(sleepScore)}">${sleepScore ?? '—'}</div>
-          <div class="txm-oura-score-label">Sleep Score</div>
+          <div class="txm-oura-score-label">😴 Sleep</div>
         </div>
         <div class="txm-oura-score-box">
           <div class="txm-oura-score-num" style="color:${scoreColor(readyScore)}">${readyScore ?? '—'}</div>
-          <div class="txm-oura-score-label">Readiness</div>
+          <div class="txm-oura-score-label">⚡ Readiness</div>
         </div>
         <div class="txm-oura-score-box">
-          <div class="txm-oura-score-num" style="color:var(--accent)">${hrv}</div>
-          <div class="txm-oura-score-label">Avg HRV</div>
+          <div class="txm-oura-score-num" style="color:${scoreColor(actScore)}">${actScore ?? '—'}</div>
+          <div class="txm-oura-score-label">🏃 Activity</div>
         </div>
-        <div class="txm-oura-score-box">
-          <div class="txm-oura-score-num" style="color:var(--color-red)">${restingHR}</div>
-          <div class="txm-oura-score-label">Resting HR</div>
+      </div>
+
+      <!-- Key vitals row -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+        ${miniStatBox('💓', hrv + ' ms', 'HRV', 'var(--accent)')}
+        ${miniStatBox('❤️', restHR + ' bpm', 'Resting HR', 'var(--color-red)')}
+        ${spo2 ? miniStatBox('🩸', spo2, 'SpO2', (o.spo2_avg||0) >= 96 ? 'var(--color-green)' : GOLD) : miniStatBox('🩸','—','SpO2','var(--text-tertiary)')}
+        ${tempDev ? miniStatBox('🌡️', tempDev, 'Temp Dev', Math.abs(o.temperature_deviation||0) < 0.5 ? 'var(--color-green)' : 'var(--color-red)') : miniStatBox('🌡️','—','Temp Dev','var(--text-tertiary)')}
+      </div>
+
+      <!-- Activity row -->
+      <div style="padding:10px 12px;background:var(--bg-surface-2);border-radius:10px;margin-bottom:12px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div style="font-size:22px;font-weight:800;color:${stepsColor};font-family:'Space Grotesk',sans-serif;line-height:1">${steps}</div>
+            <div style="font-size:9px;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:.5px;margin-top:2px">Steps · Goal 10k</div>
+          </div>
+          <div style="text-align:right">
+            ${activeCal ? `<div style="font-size:13px;font-weight:700;color:var(--color-orange)">🔥 ${activeCal} active</div>` : ''}
+            ${totalCal  ? `<div style="font-size:11px;color:var(--text-secondary)">${totalCal} total kcal</div>` : ''}
+            ${o.equivalent_walking_km ? `<div style="font-size:11px;color:var(--text-secondary)">${o.equivalent_walking_km} km equiv.</div>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:12px;font-size:11px;color:var(--text-secondary)">
+          ${o.high_activity_min   != null ? `<span>🔴 ${o.high_activity_min}m high</span>` : ''}
+          ${o.medium_activity_min != null ? `<span>🟡 ${o.medium_activity_min}m med</span>` : ''}
+          ${o.low_activity_min    != null ? `<span>🟢 ${o.low_activity_min}m low</span>` : ''}
+          ${o.sedentary_min       != null ? `<span>⚪ ${o.sedentary_min}m sedentary</span>` : ''}
         </div>
       </div>
 
       <!-- Collapsed hint -->
-      ${!_ouraExpanded ? `<div style="text-align:center;margin-top:6px"><span style="font-size:11px;color:var(--text-tertiary);cursor:pointer" data-txm="toggle-sleep">▽ durations &amp; contributors</span></div>` : ''}
+      ${!_ouraExpanded ? `<div style="text-align:center"><span style="font-size:11px;color:var(--text-tertiary);cursor:pointer" data-txm="toggle-sleep">▽ full breakdown</span></div>` : ''}
 
-      <!-- Expanded: durations + contributors + AI insight -->
+      <!-- Expanded detail -->
       ${_ouraExpanded ? `
-        <div style="margin-top:12px">
-          <div class="txm-oura-durations">
-            <div class="txm-oura-dur"><div style="font-size:15px;font-weight:800;color:var(--text-primary);font-family:'Space Grotesk',sans-serif">${totalSleep}</div><div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Total</div></div>
-            <div class="txm-oura-dur"><div style="font-size:15px;font-weight:800;color:#6B8CFF;font-family:'Space Grotesk',sans-serif">${deepSleep}</div><div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Deep</div></div>
-            <div class="txm-oura-dur"><div style="font-size:15px;font-weight:800;color:#AF52DE;font-family:'Space Grotesk',sans-serif">${remSleep}</div><div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">REM</div></div>
+        <!-- Sleep breakdown -->
+        <div style="padding-top:12px;border-top:1px solid var(--separator);margin-top:4px">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">Sleep Breakdown</div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
+            ${miniStatBox('🌙', secToHM(o.total_sleep_sec), 'Total', 'var(--text-primary)')}
+            ${miniStatBox('🔵', secToHM(o.deep_sleep_sec),  'Deep',  '#6B8CFF')}
+            ${miniStatBox('🟣', secToHM(o.rem_sleep_sec),   'REM',   '#AF52DE')}
+            ${miniStatBox('⬜', secToHM(o.light_sleep_sec), 'Light', 'var(--text-secondary)')}
           </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+            ${o.sleep_efficiency   != null ? miniStatBox('📊', o.sleep_efficiency+'%', 'Efficiency', o.sleep_efficiency>=85?'var(--color-green)':GOLD) : ''}
+            ${o.breath_avg         != null ? miniStatBox('💨', o.breath_avg+'/m', 'Breath', 'var(--text-secondary)') : ''}
+            ${o.avg_hr_sleep       != null ? miniStatBox('💗', o.avg_hr_sleep+' bpm', 'Avg HR', 'var(--text-secondary)') : ''}
+            ${bdi                  != null ? miniStatBox('😤', bdi, 'Disturbance', bdiColor) : ''}
+          </div>
+          ${o.bedtime_start ? `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px">🛏️ ${fmtTime(o.bedtime_start)} → ${fmtTime(o.bedtime_end)}${o.restless_periods ? ` · ${o.restless_periods} restless periods` : ''}</div>` : ''}
 
-          ${Object.keys(contrib).length ? `
-            <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">Contributors</div>
-              ${contribBar('Deep Sleep',   contrib.deep_sleep)}
-              ${contribBar('REM Sleep',    contrib.rem_sleep)}
-              ${contribBar('Efficiency',   contrib.efficiency)}
-              ${contribBar('Restfulness',  contrib.restfulness)}
-              ${contribBar('Timing',       contrib.timing)}
-            </div>
+          <!-- Sleep contributors -->
+          ${Object.keys(sleepContrib).length ? `
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:6px">Sleep Contributors</div>
+            ${contribBar('Deep Sleep',  sleepContrib.deep_sleep)}
+            ${contribBar('REM Sleep',   sleepContrib.rem_sleep)}
+            ${contribBar('Efficiency',  sleepContrib.efficiency)}
+            ${contribBar('Restfulness', sleepContrib.restfulness)}
+            ${contribBar('Timing',      sleepContrib.timing)}
+            ${contribBar('Total Sleep', sleepContrib.total_sleep)}
+            ${contribBar('Latency',     sleepContrib.latency)}
           ` : ''}
+        </div>
 
-          <!-- AI Insights -->
+        <!-- Readiness contributors -->
+        ${Object.keys(readyContrib).length ? `
           <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700">✦ AI Insight</div>
-              ${!ins.text && !ins.loading ? `<button data-txm="sleep-insight" style="padding:4px 12px;border-radius:20px;border:none;background:var(--accent);color:#000;font-size:11px;font-weight:700;cursor:pointer">Analyze</button>` : ''}
-              ${ins.text ? `<button data-txm="sleep-insight" style="padding:4px 10px;border-radius:20px;border:1px solid var(--separator);background:none;color:var(--text-tertiary);font-size:11px;cursor:pointer">↺</button>` : ''}
-            </div>
-            ${ins.loading ? `
-              <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);font-style:italic">
-                <div style="width:12px;height:12px;border:2px solid var(--separator);border-top-color:var(--accent);border-radius:50%;animation:txm-spin 0.7s linear infinite"></div>
-                Analyzing your sleep data…
-              </div>
-            ` : ins.error ? `
-              <div style="font-size:12px;color:var(--color-red)">${ins.error}</div>
-            ` : ins.text ? `
-              <div style="font-size:13px;color:var(--text-primary);line-height:1.6">${ins.text}</div>
-            ` : `
-              <div style="font-size:12px;color:var(--text-tertiary)">Tap Analyze for a plain-English breakdown of last night's sleep.</div>
-            `}
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:6px">Readiness Contributors</div>
+            ${contribBar('HRV Balance',          readyContrib.hrv_balance)}
+            ${contribBar('Resting Heart Rate',   readyContrib.resting_heart_rate)}
+            ${contribBar('Body Temperature',     readyContrib.body_temperature)}
+            ${contribBar('Previous Night',       readyContrib.previous_night)}
+            ${contribBar('Sleep Balance',        readyContrib.sleep_balance)}
+            ${contribBar('Activity Balance',     readyContrib.activity_balance)}
+            ${contribBar('Recovery Index',       readyContrib.recovery_index)}
+            ${contribBar('Sleep Regularity',     readyContrib.sleep_regularity)}
           </div>
+        ` : ''}
+
+        <!-- Activity contributors -->
+        ${Object.keys(actContrib).length ? `
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:6px">Activity Contributors</div>
+            ${contribBar('Stay Active',         actContrib.stay_active)}
+            ${contribBar('Move Every Hour',     actContrib.move_every_hour)}
+            ${contribBar('Training Volume',     actContrib.training_volume)}
+            ${contribBar('Training Frequency',  actContrib.training_frequency)}
+            ${contribBar('Meet Daily Targets',  actContrib.meet_daily_targets)}
+            ${contribBar('Recovery Time',       actContrib.recovery_time)}
+          </div>
+        ` : ''}
+
+        <!-- Stress -->
+        ${stressLabel ? `
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">Stress & Recovery</div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <div style="font-size:14px;font-weight:700;color:${stressColor}">${stressLabel}</div>
+              <div style="font-size:11px;color:var(--text-secondary)">
+                ${o.stress_high_min != null ? `😤 ${o.stress_high_min}m stress` : ''}
+                ${o.recovery_high_min != null ? ` · ✨ ${o.recovery_high_min}m recovery` : ''}
+              </div>
+            </div>
+          </div>
+        ` : ''}
+
+        ${workoutList}
+        ${trendChart}
+
+        <!-- AI Insight -->
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700">✦ AI Insight</div>
+            ${!ins.text && !ins.loading ? `<button data-txm="sleep-insight" style="padding:4px 12px;border-radius:20px;border:none;background:var(--accent);color:#000;font-size:11px;font-weight:700;cursor:pointer">Analyze</button>` : ''}
+            ${ins.text ? `<button data-txm="sleep-insight" style="padding:4px 10px;border-radius:20px;border:1px solid var(--separator);background:none;color:var(--text-tertiary);font-size:11px;cursor:pointer">↺</button>` : ''}
+          </div>
+          ${ins.loading ? `
+            <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);font-style:italic">
+              <div style="width:12px;height:12px;border:2px solid var(--separator);border-top-color:var(--accent);border-radius:50%;animation:txm-spin 0.7s linear infinite"></div>
+              Analyzing…
+            </div>` :
+          ins.error ? `<div style="font-size:12px;color:var(--color-red)">${ins.error}</div>` :
+          ins.text  ? `<div style="font-size:13px;color:var(--text-primary);line-height:1.6">${ins.text}</div>` :
+          `<div style="font-size:12px;color:var(--text-tertiary)">Tap Analyze for a full breakdown of your sleep, readiness & activity.</div>`}
         </div>
       ` : ''}
     </div>`;
