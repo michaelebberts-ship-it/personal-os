@@ -630,7 +630,7 @@ function render() {
         </div>
       </div>
 
-      ${renderOuraTile()}
+      <div id="txm-oura-tile">${renderOuraTile()}</div>
 
       ${renderAppleHealthTile()}
 
@@ -873,7 +873,7 @@ function handleClick(e) {
   else if (action === 'tab')      { S.activeTab=el.dataset.key; render(); return; }
   else if (action === 'chart-tab'){ S.activeChart=el.dataset.chart; render(); return; }
   else if (action === 'toggle-workout') { S.workoutExpanded=!S.workoutExpanded; render(); return; }
-  else if (action === 'toggle-sleep')   { _ouraExpanded=!_ouraExpanded; render(); return; }
+  else if (action === 'toggle-sleep')   { _ouraExpanded=!_ouraExpanded; const t=_container.querySelector('#txm-oura-tile'); if(t) t.innerHTML=renderOuraTile(); return; }
   else if (action === 'sleep-insight')  { generateSleepInsight(); return; }
   else if (action === 'ai-insight')     { generateInsight(el.dataset.key); return; }
   else if (action === 'reset-day')  { if(confirm("Reset today's checklist and protein?")){ S.checks={}; S.protein=0; _localDirty=true; txSave(); render(); } return; }
