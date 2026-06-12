@@ -5,6 +5,7 @@
 
 import { refs, dbSet, dbDelete, uid } from "../js/db.js";
 import { fetchIcalEvents } from "../js/ical.js";
+import { callAIJson, hasApiKey } from "../js/ai.js";
 
 const REFRESH_MS = 5 * 60 * 1000;
 
@@ -12,6 +13,8 @@ let _container = null;
 let _ctx = null;
 let _stateUnsub = null;
 let _refreshTimer = null;
+
+const BRIDGE = (localStorage.getItem("os_bridge_url") || "http://localhost:3333");
 
 let _local = {
   view: "week",
@@ -22,6 +25,12 @@ let _local = {
   icalLastFetch: null,
   icalError: null,
   icalLoading: false,
+  // Claude NL input
+  nlOpen: false,
+  nlText: "",
+  nlBusy: false,
+  nlPreview: null,
+  nlListening: false,
 };
 
 const tod = () => new Date().toISOString().slice(0, 10);
@@ -117,6 +126,7 @@ function render() {
   _container.innerHTML = `
     <div class="module-content">
       ${renderHeader()}
+      ${_local.nlOpen ? renderNLPanel() : ""}
       ${renderWeek(allEvents)}
       ${_local.showAddEvent ? renderAddModal() : ""}
     </div>
@@ -146,6 +156,9 @@ function renderHeader() {
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-4);gap:var(--space-3)">
       <div style="display:flex;gap:var(--space-2)">
         <button class="btn btn-sm btn-primary" data-view="week">📅 Week</button>
+        <button class="btn btn-sm ${_local.nlOpen ? 'btn-primary' : 'btn-secondary'}" id="cal-nl-toggle" style="gap:4px">
+          ✦ Claude
+        </button>
       </div>
       ${statusEl}
     </div>
@@ -499,6 +512,170 @@ function renderAddModal() {
   `;
 }
 
+// ── Claude NL panel ─────────────────────────────────────────────
+function renderNLPanel() {
+  const p = _local.nlPreview;
+  const hasMic = typeof SpeechRecognition !== "undefined" || typeof webkitSpeechRecognition !== "undefined";
+  return `
+    <div class="card" style="margin-bottom:var(--space-4);border-color:var(--accent);border-width:1.5px">
+      <div style="padding:var(--space-3) var(--space-4)">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:var(--space-2)">
+          ✦ Add with Claude
+        </div>
+        ${!p ? `
+          <div style="display:flex;gap:var(--space-2);align-items:flex-start">
+            <textarea id="cal-nl-input"
+              rows="2"
+              placeholder="e.g. dentist Thursday at 2pm, George baseball Saturday 9am at Liberty Park…"
+              style="flex:1;resize:none;background:var(--bg-surface-2);border:1px solid var(--separator);border-radius:var(--radius-md);padding:var(--space-2) var(--space-3);font-size:var(--text-sm);color:var(--text-primary);line-height:1.5"
+              ${_local.nlBusy ? "disabled" : ""}
+            >${escH(_local.nlText)}</textarea>
+            <div style="display:flex;flex-direction:column;gap:var(--space-2)">
+              ${hasMic ? `<button class="btn btn-secondary btn-sm" id="cal-nl-mic" title="Speak" style="font-size:16px;padding:6px 8px">${_local.nlListening ? "🔴" : "🎙️"}</button>` : ""}
+              <button class="btn btn-primary btn-sm" id="cal-nl-parse" ${_local.nlBusy ? "disabled" : ""} style="white-space:nowrap">
+                ${_local.nlBusy ? "…" : "→"}
+              </button>
+            </div>
+          </div>
+        ` : `
+          <div style="display:flex;flex-direction:column;gap:var(--space-2)">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:var(--space-2)">
+              <div>
+                <label style="font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Title</label>
+                <input class="input" id="cal-p-title" value="${escH(p.title)}" style="font-size:var(--text-sm)">
+              </div>
+              <div>
+                <label style="font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Calendar</label>
+                <input class="input" id="cal-p-calendar" value="${escH(p.calendar)}" style="font-size:var(--text-sm)">
+              </div>
+              <div>
+                <label style="font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Date</label>
+                <input class="input" id="cal-p-date" type="date" value="${escH(p.date)}" style="font-size:var(--text-sm)">
+              </div>
+              <div>
+                <label style="font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Start time</label>
+                <input class="input" id="cal-p-time" type="time" value="${escH(p.time)}" style="font-size:var(--text-sm)">
+              </div>
+              <div>
+                <label style="font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase">End time</label>
+                <input class="input" id="cal-p-end" type="time" value="${escH(p.endTime)}" style="font-size:var(--text-sm)">
+              </div>
+              <div>
+                <label style="font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase">Location</label>
+                <input class="input" id="cal-p-loc" value="${escH(p.location)}" style="font-size:var(--text-sm)">
+              </div>
+            </div>
+            <div style="display:flex;gap:var(--space-2);justify-content:flex-end;margin-top:var(--space-1)">
+              <button class="btn btn-ghost btn-sm" id="cal-nl-cancel">Cancel</button>
+              <button class="btn btn-primary btn-sm" id="cal-nl-confirm" ${_local.nlBusy ? "disabled" : ""}>
+                ${_local.nlBusy ? "Adding…" : "Add to Calendar ✓"}
+              </button>
+            </div>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+async function parseCalNL(text) {
+  text = (text || "").trim();
+  if (!text || _local.nlBusy) return;
+  _local.nlText = text;
+  _local.nlBusy = true;
+  _local.nlPreview = null;
+  render();
+
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const dow = today.toLocaleDateString("en-US", { weekday: "long" });
+
+  const prompt = `Extract a calendar event from this text into JSON. Today is ${dow}, ${todayStr}.
+Text: "${text}"
+Return ONLY a JSON object (no markdown) with these keys:
+- title: short event title (required)
+- date: "YYYY-MM-DD" (required, resolve relative dates like "tomorrow", "next Friday", "this Saturday")
+- time: start time as "HH:mm" 24-hour, or "" if not mentioned
+- endTime: end time as "HH:mm" 24-hour, or "" if not mentioned
+- location: location string, or ""
+- calendar: best calendar name like "Personal", "Family", "Work", or "iCloud"
+- notes: any extra detail, or ""`;
+
+  const parsed = await callAIJson(prompt, null, { maxTokens: 300 });
+  _local.nlBusy = false;
+
+  if (!parsed?.title || !parsed?.date) {
+    render();
+    alert("Couldn't parse that into an event. Try rephrasing.");
+    return;
+  }
+  _local.nlPreview = {
+    title:    parsed.title || "",
+    date:     parsed.date || todayStr,
+    time:     parsed.time || "",
+    endTime:  parsed.endTime || "",
+    location: parsed.location || "",
+    calendar: parsed.calendar || "Personal",
+    notes:    parsed.notes || "",
+  };
+  render();
+}
+
+async function confirmCalNL() {
+  if (_local.nlBusy) return;
+  const $ = id => document.getElementById(id);
+  const payload = {
+    title:    $("cal-p-title")?.value?.trim() || "",
+    date:     $("cal-p-date")?.value || "",
+    time:     $("cal-p-time")?.value || "",
+    endTime:  $("cal-p-end")?.value || "",
+    location: $("cal-p-loc")?.value?.trim() || "",
+    calendar: $("cal-p-calendar")?.value?.trim() || "Personal",
+    notes:    _local.nlPreview?.notes || "",
+  };
+  if (!payload.title || !payload.date) { alert("Title and date are required."); return; }
+
+  _local.nlBusy = true;
+  render();
+
+  try {
+    const res = await fetch(`${BRIDGE}/calendar/add`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "add failed");
+    _local.nlBusy = false;
+    _local.nlPreview = null;
+    _local.nlText = "";
+    _local.nlOpen = false;
+    render();
+    showToast("Event added to Apple Calendar ✓");
+    setTimeout(() => fetchIcal(), 2000);
+  } catch (e) {
+    // Bridge not reachable (iPhone away from Mac) — save to Firestore manually-added events
+    const ev = {
+      id: uid(),
+      title: payload.title,
+      date: payload.date,
+      time: payload.time,
+      endTime: payload.endTime,
+      location: payload.location,
+      calendar: payload.calendar,
+      color: "#007AFF",
+      source: "manual",
+    };
+    await dbSet(refs.event(ev.id), ev);
+    _local.nlBusy = false;
+    _local.nlPreview = null;
+    _local.nlText = "";
+    _local.nlOpen = false;
+    render();
+    showToast("Saved ✓ (will sync to Apple Calendar when your Mac is reachable)");
+  }
+}
+
 // ── Event binding ───────────────────────────────────────────────
 function bindEvents() {
   if (!_container) return;
@@ -561,6 +738,35 @@ function bindEvents() {
   );
 
   on("refresh-cal", "click", () => fetchIcal());
+
+  // Claude NL toggle
+  on("cal-nl-toggle", "click", () => { _local.nlOpen = !_local.nlOpen; _local.nlPreview = null; _local.nlText = ""; render(); setTimeout(() => $("cal-nl-input")?.focus(), 50); });
+
+  // NL input
+  on("cal-nl-input", "input", (e) => { _local.nlText = e.target.value; });
+  on("cal-nl-parse", "click", () => parseCalNL($("cal-nl-input")?.value || _local.nlText));
+  on("cal-nl-input", "keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); parseCalNL($("cal-nl-input")?.value || _local.nlText); } });
+  on("cal-nl-cancel", "click", () => { _local.nlPreview = null; _local.nlText = ""; render(); });
+  on("cal-nl-confirm", "click", () => confirmCalNL());
+
+  // Mic (Web Speech API)
+  on("cal-nl-mic", "click", () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    if (_local.nlListening) return;
+    const rec = new SR();
+    rec.lang = "en-US"; rec.interimResults = false; rec.maxAlternatives = 1;
+    _local.nlListening = true; render();
+    rec.onresult = (e) => {
+      const t = e.results[0][0].transcript;
+      _local.nlListening = false;
+      _local.nlText = t;
+      render();
+      parseCalNL(t);
+    };
+    rec.onerror = rec.onend = () => { _local.nlListening = false; render(); };
+    rec.start();
+  });
 }
 
 function showToast(msg) {
