@@ -2,6 +2,7 @@ import { MODULES } from "./config.js";
 import { refs, subscribe as dbSubscribe, subscribeDoc, uid } from "./db.js";
 import { setState, getState } from "./state.js";
 import { navigate, onModuleChange, initRouter, getCurrentModule, getAllModules } from "./router.js";
+import { initGlobalAI } from "./global-ai.js";
 
 // ── DOM refs ──────────────────────────────────────────────────
 const navList       = document.getElementById("nav-list");
@@ -195,6 +196,9 @@ async function boot() {
 
   // Build initial nav (modules are known from config, no async load needed)
   buildNav();
+
+  // Global AI assistant (persists across all modules)
+  initGlobalAI(navigate);
 
   // Navigate to initial route
   initRouter("home");

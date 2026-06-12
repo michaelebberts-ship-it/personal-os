@@ -8,6 +8,7 @@ import { getDebrief, getCachedDebrief } from "../js/debrief.js";
 import { refs, dbSet, uid } from "../js/db.js";
 import { fetchWeatherDetail } from "../js/weather.js";
 import { fetchIcalEvents } from "../js/ical.js";
+import { openWithPrompt } from "../js/global-ai.js";
 
 let _container = null;
 let _ctx = null;
@@ -17,9 +18,7 @@ let _debrief = { text: null, loading: false, date: null, error: null };
 let _wx = null;
 let _icalEvents = [];
 
-// ── Claude Assistant state ─────────────────────────────────────
 const BRIDGE = localStorage.getItem("os_bridge_url") || "http://localhost:3333";
-let _ai = { open: false, busy: false, listening: false, msgs: [], input: "" };
 
 // ── Helpers ────────────────────────────────────────────────────
 const _esc = s => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -110,15 +109,6 @@ function render() {
   if (topBar) topBar.classList.add("hidden");
 
   _container.innerHTML = `
-    ${renderAiSheet()}
-    <button id="ai-fab" title="Ask Claude" style="
-      position:fixed;bottom:calc(var(--bottom-nav-height,0px) + 20px);right:20px;
-      width:52px;height:52px;border-radius:50%;
-      background:linear-gradient(135deg,#00D4FF,#0080FF);
-      color:#fff;font-size:22px;display:flex;align-items:center;justify-content:center;
-      box-shadow:0 4px 20px rgba(0,212,255,.45);border:none;cursor:pointer;z-index:900;
-      transition:transform .15s;
-    ">✦</button>
     <div style="padding: var(--space-5); max-width: 1200px; margin: 0 auto;">
 
       <!-- Greeting row -->
@@ -588,8 +578,8 @@ async function openDinnerModal() {
   } else { render(); }
 }
 
-// ── Claude Assistant ────────────────────────────────────────────
-function renderAiSheet() {
+// ── (AI assistant moved to js/global-ai.js) ────────────────────
+function _unused_renderAiSheet() {
   if (!_ai.open) return "";
   const hasMic = typeof SpeechRecognition !== "undefined" || typeof webkitSpeechRecognition !== "undefined";
   const msgs = _ai.msgs.map(m => `
@@ -647,7 +637,7 @@ function renderAiSheet() {
   `;
 }
 
-function buildContext() {
+function _unused_buildContext() {
   const S = _ctx.state();
   const today = new Date();
   const todayStr = today.toISOString().slice(0, 10);
@@ -708,7 +698,7 @@ ACTIONS:
 - Only include the ACTIONS block when taking action — omit it for pure questions.`;
 }
 
-async function sendToAI(text) {
+async function _unused_sendToAI(text) {
   if (!text.trim() || _ai.busy) return;
   _ai.msgs.push({ role: "user", text: text.trim() });
   _ai.input = "";
@@ -737,7 +727,7 @@ async function sendToAI(text) {
   }
 }
 
-async function executeActions(actionBlock) {
+async function _unused_executeActions(actionBlock) {
   let actions;
   try { actions = JSON.parse(actionBlock); } catch { return; }
   if (!Array.isArray(actions)) return;
@@ -818,77 +808,16 @@ async function executeActions(actionBlock) {
   }
 }
 
-function renderSheet() {
-  // Re-render just the sheet without touching the whole page
-  const existing = document.getElementById("ai-sheet");
-  const backdrop = document.getElementById("ai-sheet-backdrop");
-  if (existing) existing.remove();
-  if (backdrop) backdrop.remove();
-  const fab = document.getElementById("ai-fab");
-  if (fab) fab.insertAdjacentHTML("beforebegin", renderAiSheet());
-  bindAiEvents();
-  // Scroll messages to bottom
-  const msgs = document.getElementById("ai-msgs");
-  if (msgs) msgs.scrollTop = msgs.scrollHeight;
-}
 
 // ── Event binding ───────────────────────────────────────────────
-function bindAiEvents() {
-  const fab  = document.getElementById("ai-fab");
-  const close = document.getElementById("ai-close");
-  const backdrop = document.getElementById("ai-sheet-backdrop");
-  const send  = document.getElementById("ai-send");
-  const input = document.getElementById("ai-input");
-  const mic   = document.getElementById("ai-mic");
-
-  if (fab)  fab.onclick  = () => { _ai.open = true; render(); setTimeout(() => { document.getElementById("ai-input")?.focus(); document.getElementById("ai-msgs").scrollTop = 9999; }, 80); };
-  if (close) close.onclick = () => { _ai.open = false; render(); };
-  if (backdrop) backdrop.onclick = () => { _ai.open = false; render(); };
-
-  if (input) {
-    input.addEventListener("input",   e => { _ai.input = e.target.value; autoResize(e.target); });
-    input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendToAI(input.value); } });
-  }
-  if (send) send.onclick = () => sendToAI(document.getElementById("ai-input")?.value || _ai.input);
-
-  if (mic) {
-    mic.onclick = () => {
-      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR || _ai.listening) return;
-      const rec = new SR();
-      rec.lang = "en-US"; rec.interimResults = false;
-      _ai.listening = true; renderSheet();
-      rec.onresult = e => {
-        const t = e.results[0][0].transcript;
-        _ai.listening = false;
-        sendToAI(t);
-      };
-      rec.onerror = rec.onend = () => { _ai.listening = false; renderSheet(); };
-      rec.start();
-    };
-  }
-}
-
-function autoResize(el) {
-  el.style.height = "auto";
-  el.style.height = Math.min(el.scrollHeight, 120) + "px";
-}
-
 function bindEvents() {
   if (!_container) return;
-  bindAiEvents();
 
   _container.querySelectorAll("[data-tile-ai]").forEach(btn => {
     btn.addEventListener("click", e => {
       e.stopPropagation();
-      const key = btn.dataset.tileAi;
-      const prompt = TILE_PROMPTS[key];
-      if (prompt) {
-        _ai.open = true;
-        _ai.msgs = [];
-        render();
-        setTimeout(() => sendToAI(prompt), 80);
-      }
+      const prompt = TILE_PROMPTS[btn.dataset.tileAi];
+      if (prompt) openWithPrompt(prompt);
     });
   });
 
@@ -995,7 +924,6 @@ export function cleanup() {
   _unsubscribes.forEach(u => u?.());
   _unsubscribes = [];
   _dinnerModal = { open: false, loading: false };
-  _ai = { open: false, busy: false, listening: false, msgs: [], input: "" };
   _wx = null;
   _icalEvents = [];
   _container = null;
