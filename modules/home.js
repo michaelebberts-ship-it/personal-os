@@ -184,8 +184,6 @@ function render() {
           </div>
         </div>
 
-        ${!hasApiKey ? apiKeyTile() : ""}
-
       </div>
 
       ${_dinnerModal.open ? renderDinnerModal(weekDinners) : ""}
