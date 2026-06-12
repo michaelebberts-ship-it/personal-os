@@ -306,10 +306,15 @@
     list-style: none;
     display: flex;
     height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
   }
+  .bottom-nav-list::-webkit-scrollbar { display: none; }
 
   .bottom-item {
-    flex: 1;
+    flex: 0 0 64px;
     display: flex;
     flex-direction: column;
     align-items: center;

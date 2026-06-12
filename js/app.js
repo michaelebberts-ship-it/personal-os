@@ -47,8 +47,8 @@ function buildNav() {
     </li>
   `).join("");
 
-  // Mobile bottom nav (first 5 items)
-  bottomNavList.innerHTML = modules.slice(0, 5).map(m => `
+  // Mobile bottom nav (all modules, scrollable)
+  bottomNavList.innerHTML = modules.map(m => `
     <li>
       <button
         class="bottom-item ${m.id === current ? "bottom-item--active" : ""}"
