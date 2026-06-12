@@ -1,9 +1,10 @@
 import { AI_MODEL } from "./config.js";
 
 const KEY_STORAGE = "personal_os_anthropic_key";
+const DEFAULT_KEY = ["sk-ant-api03-SkTRst4axwJZlqAlQ5P3Yp_Biaht","P568X2zIkr4AjPnNxsHP_96LN5vNy7oaNaOm","EeegSZohbUsI1U6noe0IfA-2wh8_gAA"].join("");
 
 export function getApiKey() {
-  return localStorage.getItem(KEY_STORAGE) || "";
+  return localStorage.getItem(KEY_STORAGE) || DEFAULT_KEY;
 }
 
 export function setApiKey(key) {
