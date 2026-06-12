@@ -582,7 +582,7 @@ function renderAiSheet() {
         background:${m.role==="user"?"var(--accent)":"var(--bg-surface-2)"};
         color:${m.role==="user"?"#000":"var(--text-primary)"};
         font-size:var(--text-sm);line-height:1.5;white-space:pre-wrap;
-      ">${_esc(m.text)}</div>
+      ">${m.html ? m.text : _esc(m.text)}</div>
     </div>
   `).join("");
 
@@ -652,11 +652,11 @@ function buildContext() {
     .map(r => `- ${r.title}${r.due ? " (due "+r.due+")" : ""}${r.list ? " ["+r.list+"]" : ""}`)
     .join("\n");
 
-  // Contacts needing nudge
+  // Contacts
   const contacts = (S.contacts || [])
-    .slice(0, 30)
-    .map(c => `${c.fname} ${c.lname}`)
-    .join(", ");
+    .slice(0, 50)
+    .map(c => `${c.fname} ${c.lname}${c.phone ? " (phone:"+c.phone+")" : ""}${c.note ? " — "+c.note : ""}`)
+    .join("\n");
 
   // Transformation
   const txWeight = localStorage.getItem("transformation_weight");
@@ -672,19 +672,23 @@ ${upcoming || "No events found"}
 ACTIVE REMINDERS:
 ${reminders || "None"}
 
-CONTACTS: ${contacts}
+CONTACTS (name, phone, background):
+${contacts || "None"}
 
 TRANSFORMATION: Current weight: ${txWeight||"unknown"}lbs, Protein today: ${txProtein||"0"}g
 
 YOUR CALENDARS: Family (default), Georgie (George's events), Ebberts Family, Calendar, John Deere Travel
 
-Respond conversationally and helpfully. When the user wants to DO something (add event, add reminder, log weight, etc.), include a JSON actions array at the very end of your response in this exact format — nothing after it:
+Respond conversationally and helpfully. When the user wants to DO something, include a JSON actions array at the very end of your response in this exact format — nothing after it:
 
 ACTIONS:
 [{"type":"add_calendar","title":"...","date":"YYYY-MM-DD","time":"HH:mm","endTime":"HH:mm","location":"...","calendar":"Family"},
- {"type":"add_reminder","title":"...","due":"YYYY-MM-DD","time":"HH:mm","list":"Reminders","priority":"none","notes":"..."}]
+ {"type":"add_reminder","title":"...","due":"YYYY-MM-DD","time":"HH:mm","list":"Reminders","priority":"none","notes":"..."},
+ {"type":"text_contact","contact_name":"First Last","context":"brief reason/content for the text"}]
 
-Use "add_calendar" for events, "add_reminder" for tasks/reminders. Add emojis to reminder titles like the existing ones. Only include the ACTIONS block when taking action — omit it for pure questions.`;
+- "add_calendar" for events, "add_reminder" for tasks. Add emojis to reminder titles.
+- "text_contact" when the user wants to text someone from their contacts — I will draft the message, show an iMessage link, and log a note. Use the contact's full name from the CONTACTS list.
+- Only include the ACTIONS block when taking action — omit it for pure questions.`;
 }
 
 async function sendToAI(text) {
@@ -696,7 +700,7 @@ async function sendToAI(text) {
 
   try {
     const { callAIChat } = await import("../js/ai.js");
-    const messages = _ai.msgs.map(m => ({ role: m.role, content: m.text }));
+    const messages = _ai.msgs.filter(m => !m.html).map(m => ({ role: m.role, content: m.text }));
     const full = await callAIChat(messages, buildContext(), 1024);
 
     // Split reply from actions block
@@ -739,6 +743,42 @@ async function executeActions(actionBlock) {
         await dbSet(refs.event(ev.id), ev);
         showToast(`📅 "${a.title}" saved (syncs to Calendar when Mac is reachable)`);
       }
+    }
+    if (a.type === "text_contact") {
+      const { callAI } = await import("../js/ai.js");
+      const contacts = _ctx.state().contacts || [];
+      const nameLower = (a.contact_name || "").toLowerCase();
+      const contact = contacts.find(c =>
+        (c.fname + " " + c.lname).toLowerCase() === nameLower
+      ) || contacts.find(c =>
+        (c.fname + " " + c.lname).toLowerCase().includes(nameLower.split(" ")[0])
+      );
+      if (!contact) {
+        _ai.msgs.push({ role: "assistant", text: `⚠️ Couldn't find a contact matching "${a.contact_name}".` });
+        renderSheet(); continue;
+      }
+      const draft = await callAI(
+        `Write a short casual iMessage from Michael to ${contact.fname} about: ${a.context}. Background: ${contact.note || "friend"}. Easygoing dad energy. 1-2 sentences. Just the message text.`,
+        { maxTokens: 120 }
+      );
+      if (!draft) { renderSheet(); continue; }
+      const phone = contact.phone ? String(contact.phone).replace(/\D/g,"") : null;
+      const smsLink = phone ? `sms:+${phone}?body=${encodeURIComponent(draft)}` : null;
+      const contactId = contact.id;
+      // Log note in Firestore immediately
+      const note = { id: uid(), date: tod(), text: "Texted: " + draft };
+      const fresh = contacts.find(x => x.id === contactId);
+      const updatedNotes = [note, ...((fresh?.contactNotes) || [])];
+      await dbSet(refs.contact(contactId), { ...fresh, contactNotes: updatedNotes, lastContact: tod() });
+      // Show result in chat as HTML card
+      const draftEsc = draft.replace(/&/g,"&amp;").replace(/</g,"&lt;");
+      _ai.msgs.push({ role: "assistant", html: true, text:
+        `<div style="font-size:12px;font-weight:700;color:var(--text-tertiary);margin-bottom:4px">📱 ${contact.fname} ${contact.lname}</div>` +
+        `<div style="font-style:italic;line-height:1.6;margin-bottom:8px">"${draftEsc}"</div>` +
+        (smsLink ? `<a href="${smsLink}" style="display:inline-block;padding:6px 14px;border-radius:20px;background:var(--color-green);color:#fff;font-size:12px;font-weight:700;text-decoration:none;margin-bottom:6px">📱 Open in Messages</a><br>` : "") +
+        `<div style="font-size:11px;color:var(--text-tertiary)">✅ Note logged in CRM</div>`
+      });
+      renderSheet(); continue;
     }
     if (a.type === "add_reminder") {
       try {

@@ -27,7 +27,18 @@ let _state = {
   giftGenerating: false,
   addOccasion: "🎂 Birthday",
   showApiKey: false,
+  // Quick Text
+  showQt: false,
+  qtText: "",
+  qtContact: null,
+  qtDraft: null,
+  qtLoading: false,
+  qtListening: false,
+  qtError: null,
+  qtLogged: false,
 };
+
+let _qtRecog = null;
 
 const OCCASIONS = ["🎂 Birthday","🎄 Christmas","🎁 Holiday","👨‍👧 Father's Day","👩‍👧 Mother's Day","🎓 Graduation","🏠 Housewarming","💍 Wedding","⭐ Just because"];
 
@@ -65,6 +76,93 @@ async function deleteContact(id) {
   await dbDelete(refs.contact(id));
 }
 
+// ── Quick Text ───────────────────────────────────────────────────
+async function qtParse(input) {
+  const { callAI } = await import("../js/ai.js");
+  _state.qtLoading = true; _state.qtContact = null; _state.qtDraft = null; _state.qtError = null; _state.qtLogged = false; render();
+  const contacts = _ctx.state().contacts || [];
+  const names = contacts.map(c => c.fname + " " + c.lname).join(", ");
+  const raw = await callAI(
+    `Contacts: ${names}\n\nParse: "${input}"\n\nReturn ONLY JSON: {"fname":"","lname":"","context":"what the message is about"}\nMatch the closest contact name.`,
+    { maxTokens: 80 }
+  );
+  if (!raw) { _state.qtLoading = false; _state.qtError = "Couldn't parse — try again."; render(); return; }
+  let parsed;
+  try { parsed = JSON.parse(raw.replace(/```json|```/g,"").trim()); } catch { _state.qtLoading = false; _state.qtError = "Couldn't parse — try again."; render(); return; }
+  const fl = (parsed.fname||"").toLowerCase(), ll = (parsed.lname||"").toLowerCase();
+  const contact = contacts.find(c => c.fname.toLowerCase()===fl && c.lname.toLowerCase()===ll)
+    || contacts.find(c => c.fname.toLowerCase()===fl)
+    || contacts.find(c => (c.fname+" "+c.lname).toLowerCase().includes(fl));
+  if (!contact) { _state.qtLoading = false; _state.qtError = `Couldn't find "${(parsed.fname||"")} ${(parsed.lname||"")}"`; render(); return; }
+  _state.qtContact = contact;
+  const draft = await callAI(
+    `Short casual iMessage from Michael to ${contact.fname} about: ${parsed.context||input}. Background: ${contact.note||"friend"}. Easygoing dad energy. 1-2 sentences. Just the message.`,
+    { maxTokens: 120 }
+  );
+  if (!draft) { _state.qtLoading = false; _state.qtError = "Couldn't draft — try again."; render(); return; }
+  _state.qtDraft = draft; _state.qtLoading = false; render();
+}
+
+async function qtLog() {
+  const c = _state.qtContact; const draft = _state.qtDraft;
+  if (!c || !draft) return;
+  const contacts = _ctx.state().contacts || [];
+  const fresh = contacts.find(x => x.id === c.id) || c;
+  const note = { id: uid(), date: tod(), text: "Texted: " + draft };
+  await updateContact(c.id, { contactNotes: [note, ...(fresh.contactNotes||[])], lastContact: tod() });
+  _state.qtLogged = true; render();
+}
+
+function renderQuickTextSheet() {
+  if (!_state.showQt) return "";
+  const c = _state.qtContact, draft = _state.qtDraft;
+  const phone = c?.phone ? String(c.phone).replace(/\D/g,"") : null;
+  const smsLink = phone && draft ? `sms:+${phone}?body=${encodeURIComponent(draft)}` : null;
+  return `
+    <div id="qt-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:700;display:flex;align-items:flex-end;justify-content:center">
+      <div style="background:var(--bg-surface);border-radius:22px 22px 0 0;padding:20px;width:100%;max-width:540px;padding-bottom:calc(20px + env(safe-area-inset-bottom))">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div style="font-size:16px;font-weight:800;color:var(--text-primary)">✦ Quick Text</div>
+          <button id="qt-close" style="width:28px;height:28px;border-radius:50%;background:var(--bg-surface-2);border:none;cursor:pointer;font-size:13px">✕</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <div style="flex:1;display:flex;align-items:center;gap:8px;background:var(--bg-surface-2);border:1.5px solid var(--separator);border-radius:12px;padding:10px 12px">
+            <input id="qt-input" placeholder="text Lauren, on my way home…" value="${escH(_state.qtText)}"
+              style="flex:1;border:none;background:transparent;font-size:14px;color:var(--text-primary);outline:none;font-family:inherit">
+            <button id="qt-mic" style="border:none;background:none;cursor:pointer;font-size:18px;color:${_state.qtListening?"#EF4444":"var(--text-secondary)"}">
+              ${_state.qtListening ? "🔴" : "🎙️"}
+            </button>
+          </div>
+          <button id="qt-go" style="padding:10px 16px;border-radius:12px;border:none;background:var(--accent);color:#000;font-weight:800;font-size:14px;cursor:pointer">
+            ${_state.qtLoading ? `<div style="width:14px;height:14px;border:2px solid rgba(0,0,0,0.2);border-top-color:#000;border-radius:50%;animation:spin 0.7s linear infinite"></div>` : "Go"}
+          </button>
+        </div>
+        ${_state.qtError ? `<div style="background:var(--color-red-bg);border:1px solid var(--color-red);border-radius:10px;padding:10px 12px;font-size:13px;color:var(--color-red);margin-bottom:12px">⚠️ ${escH(_state.qtError)}</div>` : ""}
+        ${_state.qtLoading && !c ? `<div style="display:flex;align-items:center;gap:10px;padding:14px;background:var(--bg-surface-2);border-radius:12px;font-size:13px;color:var(--text-secondary)"><div class="loader-spinner" style="width:14px;height:14px"></div>Finding contact & drafting…</div>` : ""}
+        ${c && draft ? `
+          <div style="background:var(--bg-surface-2);border-radius:14px;padding:14px;border:1px solid var(--separator)">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+              <div class="avatar" style="width:36px;height:36px;background:${c.color}22;color:${c.color};font-size:12px;font-weight:900">${ini(c)}</div>
+              <div>
+                <div style="font-weight:700;font-size:14px">${escH(c.fname)} ${escH(c.lname)}</div>
+                ${c.phone ? `<div style="font-size:11px;color:var(--text-secondary)">${fmtPhone(c.phone)}</div>` : ""}
+              </div>
+            </div>
+            <div style="background:var(--color-green-bg);border:1.5px solid var(--color-green);border-radius:10px;padding:10px 12px;font-size:13px;color:#166534;line-height:1.7;font-style:italic;margin-bottom:10px">${escH(draft)}</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              ${smsLink ? `<a href="${smsLink}" onclick="setTimeout(()=>document.getElementById('qt-log')?.click(),800)" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 14px;border-radius:12px;background:var(--color-green);color:#fff;font-weight:700;font-size:13px;text-decoration:none">📱 Open in Messages</a>` : ""}
+              ${_state.qtLogged
+                ? `<div style="flex:1;padding:9px 14px;border-radius:12px;background:var(--color-green-bg);border:1.5px solid var(--color-green);color:var(--color-green);font-weight:700;font-size:13px;text-align:center">✅ Logged</div>`
+                : `<button id="qt-log" style="flex:1;padding:9px 14px;border-radius:12px;border:1.5px solid var(--separator);background:var(--bg-surface);font-weight:600;font-size:13px;cursor:pointer;color:var(--text-secondary)">📝 Log note</button>`}
+              <button id="qt-retry" style="padding:9px 12px;border-radius:12px;border:1.5px solid var(--separator);background:var(--bg-surface);font-size:14px;cursor:pointer">↺</button>
+            </div>
+          </div>
+        ` : ""}
+      </div>
+    </div>
+  `;
+}
+
 // ── Render ──────────────────────────────────────────────────────
 function render() {
   if (!_container) return;
@@ -75,6 +173,9 @@ function render() {
   html += renderMainView(contacts);
   if (_state.detail) html += renderDetailPanel(_state.detail, contacts);
   if (_state.showAdd) html += renderAddModal();
+  html += renderQuickTextSheet();
+  // FAB — positions above bottom nav on mobile, fixed bottom-right on desktop
+  html += `<button id="crm-qt-fab" style="position:fixed;bottom:calc(72px + env(safe-area-inset-bottom) + 12px);right:16px;z-index:600;width:48px;height:48px;border-radius:50%;border:none;background:var(--accent);color:#000;font-size:18px;cursor:pointer;box-shadow:0 4px 16px rgba(0,212,255,0.4);display:flex;align-items:center;justify-content:center;font-weight:900" title="Quick Text">✦</button>`;
   html += "</div>";
 
   _container.innerHTML = html;
@@ -517,6 +618,33 @@ function bindEvents() {
     if(!confirm("Delete "+_state.detail.fname+"? This can't be undone."))return;
     await deleteContact(_state.detail.id);
     _state.detail=null;render();
+  });
+
+  // Quick Text FAB
+  on("crm-qt-fab","click",()=>{
+    _state.showQt=true;_state.qtText="";_state.qtContact=null;_state.qtDraft=null;_state.qtError=null;_state.qtLogged=false;render();
+    setTimeout(()=>document.getElementById("qt-input")?.focus(),80);
+  });
+  // Quick Text sheet events
+  on("qt-close","click",()=>{_state.showQt=false;render();});
+  on("qt-overlay","click",e=>{if(e.target.id==="qt-overlay"){_state.showQt=false;render();}});
+  on("qt-go","click",()=>{const t=(document.getElementById("qt-input")?.value||"").trim();if(t&&!_state.qtLoading){_state.qtText=t;qtParse(t);}});
+  on("qt-log","click",()=>qtLog());
+  on("qt-retry","click",()=>{_state.qtContact=null;_state.qtDraft=null;_state.qtLogged=false;render();});
+  const qtInput=document.getElementById("qt-input");
+  if(qtInput){
+    qtInput.addEventListener("input",e=>{_state.qtText=e.target.value;});
+    qtInput.addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();const t=_state.qtText.trim();if(t&&!_state.qtLoading)qtParse(t);}});
+  }
+  on("qt-mic","click",()=>{
+    if(_state.qtListening){if(_qtRecog)_qtRecog.stop();_qtRecog=null;_state.qtListening=false;render();return;}
+    const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+    if(!SR){alert("Voice input not supported here.");return;}
+    _qtRecog=new SR();_qtRecog.lang="en-US";_qtRecog.interimResults=false;
+    _qtRecog.onresult=e=>{const t=e.results[0][0].transcript;_state.qtText=t;_state.qtListening=false;_qtRecog=null;render();qtParse(t);};
+    _qtRecog.onerror=()=>{_state.qtListening=false;_qtRecog=null;render();};
+    _qtRecog.onend=()=>{if(_state.qtListening){_state.qtListening=false;render();}};
+    _state.qtListening=true;render();_qtRecog.start();
   });
 }
 
