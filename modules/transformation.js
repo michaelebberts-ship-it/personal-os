@@ -1144,7 +1144,7 @@ function renderOuraTile() {
   const readyContrib  = o.readiness_contributors || {};
   const actContrib    = o.activity_contributors || {};
   const workouts      = o.workouts || [];
-  const trend         = o.trend_7day || [];
+  const trend         = Array.isArray(o.trend_7day) ? o.trend_7day : [];
   const ins           = _ouraInsight;
 
   // 7-day trend bars
