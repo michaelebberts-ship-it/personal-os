@@ -1139,37 +1139,73 @@ function renderOuraTile() {
   const readyContrib  = o.readiness_contributors || {};
   const actContrib    = o.activity_contributors || {};
   const workouts      = Array.isArray(o.workouts) ? o.workouts : [];
-  const trend         = Array.isArray(o.trend_7day) ? o.trend_7day : [];
+  const trend         = Array.isArray(o.trend_120day) ? o.trend_120day : (Array.isArray(o.trend_7day) ? o.trend_7day : []);
+  // Zepbound start — 60 days before today
+  const zepboundStart = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0,10); })();
   const ins           = _ouraInsight;
 
-  // 7-day trend bars
-  const trendChart = trend.length ? `
+  // 120-day SVG line chart
+  const trendChart = (() => {
+    if (!trend.length) return '';
+    const W = 480, H = 90, PAD = { t: 8, r: 8, b: 18, l: 24 };
+    const cW = W - PAD.l - PAD.r, cH = H - PAD.t - PAD.b;
+    const n = trend.length;
+    const xOf = i => PAD.l + (i / (n - 1)) * cW;
+    const yOf = v => v == null ? null : PAD.t + cH - ((v - 40) / 60) * cH;
+    const line = (key, color) => {
+      const pts = trend.map((d, i) => { const y = yOf(d[key]); return y == null ? null : `${xOf(i).toFixed(1)},${y.toFixed(1)}`; }).filter(Boolean);
+      if (!pts.length) return '';
+      // break into segments at nulls
+      const segs = []; let seg = [];
+      trend.forEach((d, i) => {
+        const y = yOf(d[key]);
+        if (y == null) { if (seg.length) { segs.push(seg); seg = []; } }
+        else seg.push(`${xOf(i).toFixed(1)},${y.toFixed(1)}`);
+      });
+      if (seg.length) segs.push(seg);
+      return segs.map(s => `<polyline points="${s.join(' ')}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>`).join('');
+    };
+    // Zepbound marker
+    const zbIdx = trend.findIndex(d => d.day >= zepboundStart);
+    const zbLine = zbIdx >= 0 ? `
+      <line x1="${xOf(zbIdx).toFixed(1)}" y1="${PAD.t}" x2="${xOf(zbIdx).toFixed(1)}" y2="${PAD.t + cH}" stroke="${GOLD}" stroke-width="1" stroke-dasharray="3,3" opacity="0.7"/>
+      <text x="${(xOf(zbIdx)+3).toFixed(1)}" y="${(PAD.t+7).toFixed(1)}" font-size="7" fill="${GOLD}" opacity="0.9">Zepbound</text>
+    ` : '';
+    // Month labels on x-axis
+    const monthLabels = [];
+    trend.forEach((d, i) => {
+      if (!d.day) return;
+      const dt = new Date(d.day + 'T12:00:00');
+      if (dt.getDate() === 1 || i === 0) {
+        monthLabels.push(`<text x="${xOf(i).toFixed(1)}" y="${H - 2}" font-size="7" fill="var(--text-tertiary)" text-anchor="middle">${dt.toLocaleDateString('en-US',{month:'short'})}</text>`);
+      }
+    });
+    // Y gridlines at 70 and 85
+    const grid = [70, 85].map(v => {
+      const y = yOf(v).toFixed(1);
+      return `<line x1="${PAD.l}" y1="${y}" x2="${PAD.l + cW}" y2="${y}" stroke="var(--separator)" stroke-width="0.5"/>
+              <text x="${PAD.l - 3}" y="${(parseFloat(y)+3).toFixed(1)}" font-size="7" fill="var(--text-tertiary)" text-anchor="end">${v}</text>`;
+    }).join('');
+    return `
     <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">7-Day Trend</div>
-      <div style="display:flex;gap:4px;align-items:flex-end;height:60px">
-        ${trend.map(d => {
-          const dayLbl = d.day ? new Date(d.day+'T12:00:00').toLocaleDateString('en-US',{weekday:'narrow'}) : '';
-          const avg = [d.sleep, d.readiness, d.activity].filter(v=>v!=null);
-          const score = avg.length ? Math.round(avg.reduce((a,b)=>a+b,0)/avg.length) : null;
-          const pct = score ? Math.round(score) : 0;
-          const col = score >= 85 ? 'var(--color-green)' : score >= 70 ? GOLD : 'var(--color-red)';
-          return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px">
-            <div style="font-size:8px;color:var(--text-tertiary);font-weight:700">${score ?? '—'}</div>
-            <div style="width:100%;flex:1;display:flex;align-items:flex-end">
-              <div style="width:100%;height:${pct}%;background:${col};border-radius:3px 3px 0 0;min-height:2px"></div>
-            </div>
-            <div style="font-size:8px;color:var(--text-tertiary)">${dayLbl}</div>
-          </div>`;
-        }).join('')}
-      </div>
-      <div style="display:flex;gap:12px;margin-top:6px;justify-content:center">
-        ${trend.length ? `
-          <span style="font-size:9px;color:var(--color-green)">● Sleep</span>
-          <span style="font-size:9px;color:${GOLD}">● Ready</span>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700">120-Day Trend</div>
+        <div style="display:flex;gap:10px">
+          <span style="font-size:9px;color:#AF52DE">● Sleep</span>
+          <span style="font-size:9px;color:var(--color-green)">● Readiness</span>
           <span style="font-size:9px;color:var(--accent)">● Activity</span>
-        ` : ''}
+        </div>
       </div>
-    </div>` : '';
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;overflow:visible">
+        ${grid}
+        ${zbLine}
+        ${line('sleep',     '#AF52DE')}
+        ${line('readiness', 'var(--color-green)')}
+        ${line('activity',  'var(--accent)')}
+        ${monthLabels.join('')}
+      </svg>
+    </div>`;
+  })();
 
   // Workouts list
   const workoutList = workouts.length ? `
