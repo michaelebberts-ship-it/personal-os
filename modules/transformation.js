@@ -1048,7 +1048,6 @@ async function generateSleepInsight() {
   _ouraInsight = { text: null, loading: true, error: null };
   render();
   const o = _oura;
-  const contrib = o.sleep_contributors || {};
   const h = _health;
   const healthLine = h?.ok ? `
 Yesterday's activity: ${h.steps_today ?? '—'} steps, ${h.calories_active_today ?? '—'} active kcal, ${h.exercise_minutes_today ?? '—'} min exercise, ${h.stand_hours_today ?? '—'} stand hours. VO2 Max: ${h.vo2_max ?? '—'}.` : '';
