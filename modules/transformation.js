@@ -898,23 +898,17 @@ function scoreColor(n) {
 
 function renderAppleHealthTile() {
   const h = _health;
-  if (!h) return `
-    <div class="txm-card txm-oura-card">
-      <h2>Apple Health <span class="txm-badge">Activity</span></h2>
-      <div style="padding:14px 0;text-align:center;color:var(--text-tertiary);font-size:13px">
-        Run <code style="color:var(--accent)">./compile_health.sh</code> once, then restart the bridge.
-      </div>
-    </div>`;
-
-  if (!h.ok) return `
-    <div class="txm-card txm-oura-card">
-      <h2>Apple Health <span class="txm-badge">Activity</span></h2>
-      <div style="padding:14px 0;text-align:center;color:var(--text-tertiary);font-size:13px">
-        ${h.error === 'binary_missing'
-          ? 'Run <code style="color:var(--accent)">./compile_health.sh</code> to set up.'
-          : h.error || 'Waiting for data…'}
-      </div>
-    </div>`;
+  if (!h || !h.ok) {
+    const msg = !h ? 'Connecting…' :
+      h.error === 'binary_missing' ? 'Bridge needs restart — health reader is ready.' :
+      h.error?.includes('timeout') ? 'Open Terminal → run <code style="color:var(--accent)">./fetch_health_data</code> → allow Health access → restart bridge.' :
+      (h.error || 'Waiting for data…');
+    return `
+      <div class="txm-card txm-oura-card">
+        <h2>Apple Health <span class="txm-badge">Activity</span></h2>
+        <div style="padding:14px 0;text-align:center;color:var(--text-tertiary);font-size:13px">${msg}</div>
+      </div>`;
+  }
 
   const steps   = h.steps_today   != null ? Math.round(h.steps_today).toLocaleString() : '—';
   const cals    = h.calories_active_today   != null ? Math.round(h.calories_active_today)   : null;
