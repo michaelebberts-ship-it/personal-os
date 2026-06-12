@@ -568,7 +568,8 @@ function bindEvents() {
     _state.noteAdding=false;render();
   });
 
-  del("[data-del-note]",async btn=>{
+  del("[data-del-note]",async e=>{
+    const btn=e.currentTarget;
     if(!_state.detail)return;
     const c=_ctx.state().contacts.find(x=>x.id===_state.detail.id)||_state.detail;
     await updateContact(c.id,{contactNotes:(c.contactNotes||[]).filter(n=>n.id!==btn.dataset.delNote)});
@@ -600,13 +601,15 @@ function bindEvents() {
     _state.giftAdding=false;render();
   });
 
-  del("[data-del-gift]",async btn=>{
+  del("[data-del-gift]",async e=>{
+    const btn=e.currentTarget;
     if(!_state.detail)return;
     const c=_ctx.state().contacts.find(x=>x.id===_state.detail.id)||_state.detail;
     await updateContact(c.id,{gifts:(c.gifts||[]).filter(g=>g.id!==btn.dataset.delGift)});
   });
 
-  del("[data-tog-gift]",async btn=>{
+  del("[data-tog-gift]",async e=>{
+    const btn=e.currentTarget;
     if(!_state.detail)return;
     const c=_ctx.state().contacts.find(x=>x.id===_state.detail.id)||_state.detail;
     await updateContact(c.id,{gifts:(c.gifts||[]).map(g=>g.id===btn.dataset.togGift?{...g,bought:!g.bought}:g)});
