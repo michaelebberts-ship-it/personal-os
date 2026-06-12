@@ -9,6 +9,8 @@ let _ctx = null;
 let _interval = null;
 let _styleEl = null;
 let _oura = null;       // cached Oura payload
+let _ouraExpanded = false;
+let _ouraInsight = { text: null, loading: false, error: null };
 
 // ── Gold accent (transformation identity color) ───────────────
 const GOLD = '#C9A961';
@@ -720,6 +722,8 @@ function handleClick(e) {
   else if (action === 'tab')      { S.activeTab=el.dataset.key; render(); return; }
   else if (action === 'chart-tab'){ S.activeChart=el.dataset.chart; render(); return; }
   else if (action === 'toggle-workout') { S.workoutExpanded=!S.workoutExpanded; render(); return; }
+  else if (action === 'toggle-sleep')   { _ouraExpanded=!_ouraExpanded; render(); return; }
+  else if (action === 'sleep-insight')  { generateSleepInsight(); return; }
   else if (action === 'reset-day')  { if(confirm("Reset today's checklist and protein?")){ S.checks={}; S.protein=0; txSave(); render(); } return; }
   else if (action === 'export')   { doExport(); }
   else if (action === 'import')   { doImport(); }
@@ -797,6 +801,7 @@ async function fetchOuraFromFirestore() {
     // Only update if this is newer than what we have
     if (!_oura || (data.lastSync && (!_oura.lastSync || data.lastSync > _oura.lastSync))) {
       _oura = { ...data, ok: true };
+      _ouraInsight = { text: null, loading: false, error: null };
       render();
     }
   } catch {
@@ -846,6 +851,32 @@ function scoreColor(n) {
   return 'var(--color-red)';
 }
 
+async function generateSleepInsight() {
+  if (!_oura) return;
+  _ouraInsight = { text: null, loading: true, error: null };
+  render();
+  const o = _oura;
+  const contrib = o.sleep_contributors || {};
+  const prompt = `You are a health coach giving Michael a plain-English interpretation of his Oura Ring sleep data. Be direct, specific, and actionable. 3-4 sentences max.
+
+Last night's data (${o.date || 'last night'}):
+- Sleep Score: ${o.sleep_score ?? '—'} | Readiness: ${o.readiness_score ?? '—'}
+- Total Sleep: ${secToHM(o.total_sleep_sec)} | Deep: ${secToHM(o.deep_sleep_sec)} | REM: ${secToHM(o.rem_sleep_sec)}
+- HRV: ${o.avg_hrv ?? '—'} ms | Resting HR: ${o.resting_hr ?? '—'} bpm
+- Contributors: Deep Sleep ${contrib.deep_sleep ?? '—'}, REM ${contrib.rem_sleep ?? '—'}, Efficiency ${contrib.efficiency ?? '—'}, Restfulness ${contrib.restfulness ?? '—'}, Timing ${contrib.timing ?? '—'}
+
+What does this mean for Michael today? Highlight 1-2 specific strengths and 1 thing to work on. No bullet points — write it as a natural paragraph.`;
+
+  try {
+    const { callAI } = await import('../js/ai.js');
+    const text = await callAI(prompt, { maxTokens: 200 });
+    _ouraInsight = { text: text || 'No insight returned.', loading: false, error: null };
+  } catch (e) {
+    _ouraInsight = { text: null, loading: false, error: 'Could not generate insight. Check your API key.' };
+  }
+  render();
+}
+
 function renderOuraTile() {
   const o = _oura;
   if (!o) {
@@ -881,10 +912,19 @@ function renderOuraTile() {
     </div>`;
   };
 
+  const ins = _ouraInsight;
+
   return `
     <div class="txm-card txm-oura-card">
-      <h2>Last Night's Sleep <span style="font-size:10px;color:var(--text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">${o.date || ''}</span></h2>
+      <!-- Header row — click chevron to expand -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
+        <h2 style="margin:0">Last Night's Sleep <span style="font-size:10px;color:var(--text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">${o.date || ''}</span></h2>
+        <button data-txm="toggle-sleep" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:18px;padding:4px;line-height:1" title="${_ouraExpanded?'Collapse':'Expand'}">
+          ${_ouraExpanded ? '▲' : '▽'}
+        </button>
+      </div>
 
+      <!-- Always-visible: 4 score tiles -->
       <div class="txm-oura-scores">
         <div class="txm-oura-score-box">
           <div class="txm-oura-score-num" style="color:${scoreColor(sleepScore)}">${sleepScore ?? '—'}</div>
@@ -904,20 +944,49 @@ function renderOuraTile() {
         </div>
       </div>
 
-      <div class="txm-oura-durations">
-        <div class="txm-oura-dur"><div style="font-size:15px;font-weight:800;color:var(--text-primary);font-family:'Space Grotesk',sans-serif">${totalSleep}</div><div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Total</div></div>
-        <div class="txm-oura-dur"><div style="font-size:15px;font-weight:800;color:#6B8CFF;font-family:'Space Grotesk',sans-serif">${deepSleep}</div><div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Deep</div></div>
-        <div class="txm-oura-dur"><div style="font-size:15px;font-weight:800;color:#AF52DE;font-family:'Space Grotesk',sans-serif">${remSleep}</div><div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">REM</div></div>
-      </div>
+      <!-- Collapsed hint -->
+      ${!_ouraExpanded ? `<div style="text-align:center;margin-top:6px"><span style="font-size:11px;color:var(--text-tertiary);cursor:pointer" data-txm="toggle-sleep">▽ durations &amp; contributors</span></div>` : ''}
 
-      ${Object.keys(contrib).length ? `
-        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">Contributors</div>
-          ${contribBar('Deep Sleep',   contrib.deep_sleep)}
-          ${contribBar('REM Sleep',    contrib.rem_sleep)}
-          ${contribBar('Efficiency',   contrib.efficiency)}
-          ${contribBar('Restfulness',  contrib.restfulness)}
-          ${contribBar('Timing',       contrib.timing)}
+      <!-- Expanded: durations + contributors + AI insight -->
+      ${_ouraExpanded ? `
+        <div style="margin-top:12px">
+          <div class="txm-oura-durations">
+            <div class="txm-oura-dur"><div style="font-size:15px;font-weight:800;color:var(--text-primary);font-family:'Space Grotesk',sans-serif">${totalSleep}</div><div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Total</div></div>
+            <div class="txm-oura-dur"><div style="font-size:15px;font-weight:800;color:#6B8CFF;font-family:'Space Grotesk',sans-serif">${deepSleep}</div><div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">Deep</div></div>
+            <div class="txm-oura-dur"><div style="font-size:15px;font-weight:800;color:#AF52DE;font-family:'Space Grotesk',sans-serif">${remSleep}</div><div style="font-size:10px;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;margin-top:2px">REM</div></div>
+          </div>
+
+          ${Object.keys(contrib).length ? `
+            <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">Contributors</div>
+              ${contribBar('Deep Sleep',   contrib.deep_sleep)}
+              ${contribBar('REM Sleep',    contrib.rem_sleep)}
+              ${contribBar('Efficiency',   contrib.efficiency)}
+              ${contribBar('Restfulness',  contrib.restfulness)}
+              ${contribBar('Timing',       contrib.timing)}
+            </div>
+          ` : ''}
+
+          <!-- AI Insights -->
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700">✦ AI Insight</div>
+              ${!ins.text && !ins.loading ? `<button data-txm="sleep-insight" style="padding:4px 12px;border-radius:20px;border:none;background:var(--accent);color:#000;font-size:11px;font-weight:700;cursor:pointer">Analyze</button>` : ''}
+              ${ins.text ? `<button data-txm="sleep-insight" style="padding:4px 10px;border-radius:20px;border:1px solid var(--separator);background:none;color:var(--text-tertiary);font-size:11px;cursor:pointer">↺</button>` : ''}
+            </div>
+            ${ins.loading ? `
+              <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);font-style:italic">
+                <div style="width:12px;height:12px;border:2px solid var(--separator);border-top-color:var(--accent);border-radius:50%;animation:txm-spin 0.7s linear infinite"></div>
+                Analyzing your sleep data…
+              </div>
+            ` : ins.error ? `
+              <div style="font-size:12px;color:var(--color-red)">${ins.error}</div>
+            ` : ins.text ? `
+              <div style="font-size:13px;color:var(--text-primary);line-height:1.6">${ins.text}</div>
+            ` : `
+              <div style="font-size:12px;color:var(--text-tertiary)">Tap Analyze for a plain-English breakdown of last night's sleep.</div>
+            `}
+          </div>
         </div>
       ` : ''}
     </div>`;
