@@ -60,6 +60,30 @@ export async function callAI(prompt, opts = {}) {
 }
 
 /**
+ * Multi-turn chat — throws on error so caller can show the real message.
+ */
+export async function callAIChat(messages, system, maxTokens = 1024) {
+  const key = getApiKey();
+  if (!key) throw new Error("No API key configured");
+
+  const isLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+  const endpoint = isLocal ? "http://localhost:3333/ai" : "https://api.anthropic.com/v1/messages";
+  const headers = isLocal
+    ? { "Content-Type": "application/json" }
+    : { "Content-Type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-client-side-api-key-access": "true" };
+  const body = { model: AI_MODEL, max_tokens: maxTokens, messages, system };
+  const payload = isLocal ? { ...body, api_key: key } : body;
+
+  const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(`API error ${res.status}: ${err?.error?.message || res.statusText}`);
+  }
+  const data = await res.json();
+  return data.content?.find(b => b.type === "text")?.text?.trim() || "";
+}
+
+/**
  * Parse a JSON response from Claude, with fallback.
  */
 export async function callAIJson(prompt, fallback = [], opts = {}) {

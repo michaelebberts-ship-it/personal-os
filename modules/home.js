@@ -695,12 +695,9 @@ async function sendToAI(text) {
   renderSheet();
 
   try {
-    const { callAI } = await import("../js/ai.js");
-    // Build message history for multi-turn (callAI accepts an array)
+    const { callAIChat } = await import("../js/ai.js");
     const messages = _ai.msgs.map(m => ({ role: m.role, content: m.text }));
-    const full = await callAI(messages, { maxTokens: 1024, system: buildContext() });
-
-    if (!full) throw new Error("No response from Claude");
+    const full = await callAIChat(messages, buildContext(), 1024);
 
     // Split reply from actions block
     const actionSplit = full.indexOf("\nACTIONS:");
