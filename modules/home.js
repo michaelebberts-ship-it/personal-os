@@ -147,14 +147,14 @@ function render() {
 
         <!-- Row 1: Schedule (left 8) + Weather (right 4) -->
         <div class="snap-tile bento-8 snap-tile--clickable" data-nav="calendar" style="min-height:280px;">
-          ${tileHeader("📅", "Today's Schedule", "Full calendar")}
+          ${tileHeader("📅", "Today's Schedule", "Full calendar", "calendar")}
           <div class="snap-tile__body" style="padding:0;">
             ${calendarTileBody(todayEvents)}
           </div>
         </div>
 
         <div class="snap-tile bento-4" style="min-height:280px;">
-          ${tileHeader("🌤", "Weather", "7-day")}
+          ${tileHeader("🌤", "Weather", "7-day", "weather")}
           <div class="snap-tile__body" style="padding:var(--space-4);">
             ${weatherTileBody()}
           </div>
@@ -162,14 +162,14 @@ function render() {
 
         <!-- Row 2: Tasks (6) + CRM (6) -->
         <div class="snap-tile bento-6 snap-tile--clickable" data-nav="reminders">
-          ${tileHeader("✓", "Tasks & Reminders", "All")}
+          ${tileHeader("✓", "Tasks & Reminders", "All", "reminders")}
           <div class="snap-tile__body" style="padding:0;">
             ${remindersTileBody(dueRem, upcomingRem)}
           </div>
         </div>
 
         <div class="snap-tile bento-6 snap-tile--clickable" data-nav="crm">
-          ${tileHeader("👥", "Inner Circle", "Open")}
+          ${tileHeader("👥", "Inner Circle", "Open", "crm")}
           <div class="snap-tile__body">
             ${crmTileBody(contacts, birthdays)}
           </div>
@@ -177,21 +177,21 @@ function render() {
 
         <!-- Row 3: Finance (4) + Meals (4) + Family (4) -->
         <div class="snap-tile bento-4 snap-tile--clickable" data-nav="finances">
-          ${tileHeader("💰", "Finance Snapshot", "Details")}
+          ${tileHeader("💰", "Finance Snapshot", "Details", "finances")}
           <div class="snap-tile__body">
             ${financeTileBody(unpaidBills, overdueBills)}
           </div>
         </div>
 
         <div class="snap-tile bento-4 snap-tile--clickable" ${todayDinner ? 'data-open-dinner' : 'data-nav="meals"'}>
-          ${tileHeader("🍽️", "Tonight's Dinner", "Meals")}
+          ${tileHeader("🍽️", "Tonight's Dinner", "Meals", "meals")}
           <div class="snap-tile__body">
             ${mealsTileBody(todayDinner)}
           </div>
         </div>
 
         <div class="snap-tile bento-4 snap-tile--clickable" data-nav="household">
-          ${tileHeader("🏠", "Household", "All tasks")}
+          ${tileHeader("🏠", "Household", "All tasks", "household")}
           <div class="snap-tile__body">
             ${householdTileBody(householdTasks)}
           </div>
@@ -220,11 +220,28 @@ function statPill(icon, count, label, color) {
   `;
 }
 
-function tileHeader(icon, label, cta) {
+const TILE_PROMPTS = {
+  calendar:  "What does my schedule look like today? Any conflicts or things I should prep for?",
+  weather:   "How's the weather this week? Anything I should plan around?",
+  reminders: "What tasks need my attention? What's overdue or coming up soon?",
+  crm:       "Who should I reach out to? Any birthdays or people I haven't connected with in a while?",
+  finances:  "How are my finances looking? Any bills overdue or coming up?",
+  meals:     "What's for dinner tonight? Any suggestions or prep I need to do?",
+  household: "What household tasks need attention? What's most urgent?",
+};
+
+function tileHeader(icon, label, cta, tileKey) {
+  const aiBtn = tileKey ? `
+    <button class="tile-ai-btn" data-tile-ai="${tileKey}"
+      style="background:none;border:1px solid rgba(0,212,255,0.3);color:var(--accent);padding:3px 8px;
+        border-radius:20px;font-size:10px;font-weight:700;cursor:pointer;font-family:inherit;
+        letter-spacing:0.5px;flex-shrink:0;transition:all .15s;"
+      onmouseover="this.style.background='rgba(0,212,255,0.1)'"
+      onmouseout="this.style.background='none'">✦ AI</button>` : "";
   return `
     <div class="snap-tile__header">
       <div class="snap-tile__title">${icon} ${label}</div>
-      <span class="snap-tile__arrow">→</span>
+      <div style="display:flex;align-items:center;gap:8px">${aiBtn}<span class="snap-tile__arrow">→</span></div>
     </div>
   `;
 }
@@ -860,6 +877,20 @@ function autoResize(el) {
 function bindEvents() {
   if (!_container) return;
   bindAiEvents();
+
+  _container.querySelectorAll("[data-tile-ai]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const key = btn.dataset.tileAi;
+      const prompt = TILE_PROMPTS[key];
+      if (prompt) {
+        _ai.open = true;
+        _ai.msgs = [];
+        render();
+        setTimeout(() => sendToAI(prompt), 80);
+      }
+    });
+  });
 
   _container.querySelectorAll("[data-nav]").forEach(el => {
     el.addEventListener("click", e => {
