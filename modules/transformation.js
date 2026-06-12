@@ -12,6 +12,15 @@ let _oura = null;       // cached Oura payload
 let _ouraExpanded = false;
 let _ouraInsight = { text: null, loading: false, error: null };
 let _health = null;     // Apple Health payload
+const _insights = {
+  health: { text: null, loading: false, error: null },
+  weight: { text: null, loading: false, error: null },
+  protein: { text: null, loading: false, error: null },
+  pullup:  { text: null, loading: false, error: null },
+  recovery:{ text: null, loading: false, error: null },
+  workout: { text: null, loading: false, error: null },
+  checklist:{ text: null, loading: false, error: null },
+};
 
 // ── Gold accent (transformation identity color) ───────────────
 const GOLD = '#C9A961';
@@ -394,6 +403,14 @@ function injectStyles() {
     .txm-oura-score-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-secondary); margin-top: 4px; }
     .txm-oura-durations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .txm-oura-dur { background: var(--bg-surface-2); border-radius: 10px; padding: 10px 12px; text-align: center; }
+    @keyframes txm-spin { to { transform: rotate(360deg); } }
+    .txm-ai-btn { background: none; border: 1px solid rgba(0,212,255,0.3); color: var(--accent); padding: 3px 9px; border-radius: 20px; font-size: 10px; font-weight: 700; cursor: pointer; font-family: inherit; letter-spacing: 0.5px; transition: all 0.15s; flex-shrink: 0; }
+    .txm-ai-btn:hover { background: rgba(0,212,255,0.1); }
+    .txm-ai-refresh { background: none; border: 1px solid var(--separator); color: var(--text-tertiary); padding: 3px 8px; border-radius: 20px; font-size: 10px; cursor: pointer; font-family: inherit; transition: all 0.15s; flex-shrink: 0; }
+    .txm-ai-refresh:hover { background: var(--bg-surface-2); }
+    .txm-ai-section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--separator); }
+    .txm-ai-label { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+    .txm-ai-label-text { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-tertiary); font-weight: 700; }
     @media (max-width: 600px) {
       .txm-cd-num { font-size: 28px; }
       .txm-countdown { gap: 20px; }
@@ -402,6 +419,124 @@ function injectStyles() {
   `;
   document.head.appendChild(el);
   _styleEl = el;
+}
+
+// ── AI insight helpers ─────────────────────────────────────────
+function aiBtn(key) {
+  return `<button class="txm-ai-btn" data-txm="ai-insight" data-key="${key}">✦ AI</button>`;
+}
+
+function aiSection(key) {
+  const ins = _insights[key];
+  if (!ins.text && !ins.loading && !ins.error) return '';
+  return `
+    <div class="txm-ai-section">
+      <div class="txm-ai-label">
+        <span class="txm-ai-label-text">✦ AI Insight</span>
+        ${ins.text ? `<button class="txm-ai-refresh" data-txm="ai-insight" data-key="${key}">↺ Refresh</button>` : ''}
+      </div>
+      ${ins.loading ? `
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);font-style:italic">
+          <div style="width:12px;height:12px;border:2px solid var(--separator);border-top-color:var(--accent);border-radius:50%;animation:txm-spin 0.7s linear infinite;flex-shrink:0"></div>
+          Analyzing…
+        </div>` :
+      ins.error ? `<div style="font-size:12px;color:var(--color-red)">${ins.error}</div>` :
+      `<div style="font-size:13px;color:var(--text-primary);line-height:1.6">${ins.text}</div>`}
+    </div>`;
+}
+
+async function generateInsight(key) {
+  const ins = _insights[key];
+  if (!ins) return;
+  _insights[key] = { text: null, loading: true, error: null };
+  render();
+
+  let prompt = '';
+  const now = new Date();
+  const dayOfWeek = now.getDay();
+  const workout = WORKOUTS[dayOfWeek];
+  const phase = getPhase(now);
+  const h = _health;
+  const o = _oura;
+
+  if (key === 'health') {
+    if (!h?.ok) { _insights[key] = { text: null, loading: false, error: 'No health data yet.' }; render(); return; }
+    prompt = `You are a fitness coach giving Michael a quick plain-English read of his Apple Health data. Be direct and specific. 3-4 sentences max.
+
+Today: ${h.steps_today ?? '—'} steps (goal 10k), ${h.calories_active_today ?? '—'} active kcal, ${h.exercise_minutes_today ?? '—'} min exercise, ${h.stand_hours_today ?? '—'} stand hours. VO2 Max: ${h.vo2_max ?? '—'} ml/kg·min (last measured). Resting HR: ${h.resting_hr ?? '—'} bpm.
+${o ? `Sleep last night: ${o.sleep_score ?? '—'} sleep score, ${o.readiness_score ?? '—'} readiness.` : ''}
+
+How is today's activity tracking vs his goals? Any standouts — good or needs attention? One actionable thing he can do right now.`;
+  }
+
+  else if (key === 'weight') {
+    const wH = getWeightHistory();
+    const entries = Object.entries(wH).sort((a,b) => a[0].localeCompare(b[0]));
+    const first = entries[0]?.[1], cur = S.weight, lost = (START_WEIGHT - cur).toFixed(1), toGo = (cur - GOAL_WEIGHT).toFixed(1);
+    const trend = entries.length >= 2 ? `started at ${entries[0][1]} lbs, now ${cur} lbs (${entries.length} weigh-ins over ${entries.length} days)` : `current ${cur} lbs`;
+    prompt = `You are a fitness coach giving Michael a brief weight progress analysis. 3 sentences max. Be encouraging but honest.
+
+Program: 40-day transformation, ${phase.phase === 'active' ? `day ${phase.dayNum} of 40` : `${phase.daysLeft} days until start`}. Start: ${START_WEIGHT} lbs, goal: ${GOAL_WEIGHT} lbs.
+Progress: ${trend}. Lost: ${lost} lbs. Still needs: ${toGo} lbs.
+
+How is he tracking toward his goal? Is the pace on target? One specific tip.`;
+  }
+
+  else if (key === 'protein') {
+    prompt = `You are a nutrition coach. Michael's daily protein target is 150-180g (non-negotiable for muscle retention on a cut). 2-3 sentences max.
+
+Right now: ${S.protein}g of ${PROTEIN_TARGET}g target (${Math.round(S.protein/PROTEIN_TARGET*100)}% of goal). Time of day: ${now.toLocaleTimeString('en-US', {hour:'numeric',minute:'2-digit'})}.
+
+Is he on track to hit his target today? What should he do right now to hit it — suggest a specific food if he's behind.`;
+  }
+
+  else if (key === 'pullup') {
+    prompt = `You are a strength coach. Michael is working toward his first pull-up. Be direct. 3 sentences max.
+
+Current stats: ${S.pullup.hang}s dead hang (goal: 60s), ${S.pullup.neg} negatives (goal: 5), ${S.pullup.rows} inverted rows (goal: 12). Milestone: at 60s hang + 5 negatives + 12 rows → first pull-up attempt.
+
+How close is he? Which metric is the weakest link right now? One specific coaching cue.`;
+  }
+
+  else if (key === 'recovery') {
+    prompt = `You are a recovery coach. Michael's weekly recovery targets: 60+ min sauna, 10+ min ice bath. 2-3 sentences max.
+
+This week: ${S.recovery.sauna} min sauna, ${S.recovery.ice} min ice bath. Day of week: ${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dayOfWeek]}.
+
+How is he tracking vs targets? Any scheduling advice given where he is in the week?`;
+  }
+
+  else if (key === 'workout') {
+    prompt = `You are a kettlebell and conditioning coach. Give Michael a quick pre-workout mental frame for today's session. 2-3 sentences max. No fluff.
+
+Today's workout (${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][dayOfWeek]}): ${workout.name} — ${workout.sub}.
+${o ? `Sleep readiness: ${o.readiness_score ?? '—'}/100. Sleep score: ${o.sleep_score ?? '—'}/100.` : ''}
+${h?.ok ? `Steps today: ${h.steps_today ?? 0}. Exercise so far: ${h.exercise_minutes_today ?? 0} min.` : ''}
+
+What's the mental key to today's session? Any adjustment based on his recovery status?`;
+  }
+
+  else if (key === 'checklist') {
+    const completed = Object.values(S.checks).filter(Boolean).length;
+    const total = DAILY_CHECKLIST.length;
+    const done = DAILY_CHECKLIST.filter(i => S.checks[i.id]).map(i => i.text);
+    const notDone = DAILY_CHECKLIST.filter(i => !S.checks[i.id]).map(i => i.text);
+    prompt = `You are Michael's accountability coach. Quick assessment of his daily protocol. 2-3 sentences max.
+
+Today's checklist: ${completed}/${total} done. Completed: ${done.join(', ') || 'none yet'}. Remaining: ${notDone.join(', ') || 'all done!'}.
+Time: ${now.toLocaleTimeString('en-US', {hour:'numeric',minute:'2-digit'})}.
+
+Quick read on where he stands — anything time-sensitive he needs to do now?`;
+  }
+
+  try {
+    const { callAI } = await import('../js/ai.js');
+    const text = await callAI(prompt, { maxTokens: 180 });
+    _insights[key] = { text: text || 'No insight returned.', loading: false, error: null };
+  } catch (e) {
+    _insights[key] = { text: null, loading: false, error: 'Could not generate insight.' };
+  }
+  render();
 }
 
 // ── Render helpers ─────────────────────────────────────────────
@@ -496,14 +631,15 @@ function render() {
       <div class="txm-grid">
 
         <div class="txm-card txm-workout-card">
-          <h2>Today's Workout <span class="txm-recovery-tag txm-recovery-${workout.recovery}">${workout.recoveryLabel}</span></h2>
+          <h2>Today's Workout <span class="txm-recovery-tag txm-recovery-${workout.recovery}">${workout.recoveryLabel}</span> ${aiBtn('workout')}</h2>
           <div class="txm-workout-name">${workout.name}</div>
           <div class="txm-workout-sub">${workout.sub}</div>
           <div>${renderWorkoutHTML(workout)}</div>
+          ${aiSection('workout')}
         </div>
 
         <div class="txm-card">
-          <h2>Weight Progress <span class="txm-badge">${lost > 0 ? '−' + lost.toFixed(1) + ' lbs' : lost < 0 ? '+' + Math.abs(lost).toFixed(1) + ' lbs' : 'Start'}</span></h2>
+          <h2>Weight Progress <span class="txm-badge">${lost > 0 ? '−' + lost.toFixed(1) + ' lbs' : lost < 0 ? '+' + Math.abs(lost).toFixed(1) + ' lbs' : 'Start'}</span> ${aiBtn('weight')}</h2>
           <div class="txm-weight-display">
             <span class="txm-weight-num">${S.weight.toFixed(1)}</span><span class="txm-weight-unit">lbs</span>
           </div>
@@ -513,10 +649,11 @@ function render() {
             <input id="txm-weight-input" type="number" step="0.1" class="txm-input" placeholder="Log today's weight">
             <button class="txm-btn txm-btn-gold" data-txm="log-weight">Log</button>
           </div>
+          ${aiSection('weight')}
         </div>
 
         <div class="txm-card">
-          <h2>Protein Today <span class="txm-badge">${S.protein}g / ${PROTEIN_TARGET}g</span></h2>
+          <h2>Protein Today <span class="txm-badge">${S.protein}g / ${PROTEIN_TARGET}g</span> ${aiBtn('protein')}</h2>
           <div class="txm-macro-row">
             <span class="txm-macro-label">Target: 150-180g</span>
             <span class="txm-macro-value" style="color:${pColor}">${S.protein}g</span>
@@ -535,18 +672,20 @@ function render() {
             <input id="txm-protein-input" type="number" class="txm-input" placeholder="Custom amount (g)">
             <button class="txm-btn txm-btn-gold" data-txm="log-protein">Add</button>
           </div>
+          ${aiSection('protein')}
         </div>
 
         <div class="txm-card">
-          <h2>Today's Checklist <span class="txm-badge">${completed}/${DAILY_CHECKLIST.length}</span></h2>
+          <h2>Today's Checklist <span class="txm-badge">${completed}/${DAILY_CHECKLIST.length}</span> ${aiBtn('checklist')}</h2>
           <ul class="txm-checklist">${checklistHTML}</ul>
           <div style="margin-top:12px;text-align:right">
             <button class="txm-reset-btn" data-txm="reset-day">Reset Day</button>
           </div>
+          ${aiSection('checklist')}
         </div>
 
         <div class="txm-card">
-          <h2>Pull-Up Progression <span class="txm-badge">Goal: 1 Rep</span></h2>
+          <h2>Pull-Up Progression <span class="txm-badge">Goal: 1 Rep</span> ${aiBtn('pullup')}</h2>
           <div class="txm-pull-stats">
             <div class="txm-stat-box">
               <div class="txm-stat-num">${S.pullup.hang}s</div>
@@ -574,10 +713,11 @@ function render() {
             </div>
           </div>
           <p class="txm-hint">Week 10 target: 60s hang • 5 negatives • 12 rows → 1st pull-up</p>
+          ${aiSection('pullup')}
         </div>
 
         <div class="txm-card">
-          <h2>Recovery This Week <span class="txm-badge">${S.recovery.sauna + S.recovery.ice} min total</span></h2>
+          <h2>Recovery This Week <span class="txm-badge">${S.recovery.sauna + S.recovery.ice} min total</span> ${aiBtn('recovery')}</h2>
           <div class="txm-recovery-stats">
             <div class="txm-stat-box" style="border-left:3px solid #FF6B6B">
               <div class="txm-stat-num" style="color:#FF6B6B">${S.recovery.sauna}</div>
@@ -599,6 +739,7 @@ function render() {
             </div>
           </div>
           <p class="txm-hint">Target: 60+ min sauna • 10+ min cold per week. Resets every Sunday.</p>
+          ${aiSection('recovery')}
         </div>
 
         <div class="txm-card">
@@ -727,6 +868,7 @@ function handleClick(e) {
   else if (action === 'toggle-workout') { S.workoutExpanded=!S.workoutExpanded; render(); return; }
   else if (action === 'toggle-sleep')   { _ouraExpanded=!_ouraExpanded; render(); return; }
   else if (action === 'sleep-insight')  { generateSleepInsight(); return; }
+  else if (action === 'ai-insight')     { generateInsight(el.dataset.key); return; }
   else if (action === 'reset-day')  { if(confirm("Reset today's checklist and protein?")){ S.checks={}; S.protein=0; txSave(); render(); } return; }
   else if (action === 'export')   { doExport(); }
   else if (action === 'import')   { doImport(); }
@@ -945,7 +1087,7 @@ function renderAppleHealthTile() {
 
   return `
     <div class="txm-card txm-oura-card">
-      <h2>Apple Health <span style="font-size:10px;color:var(--text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">${h.date || ''}</span></h2>
+      <h2>Apple Health <span style="font-size:10px;color:var(--text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">${h.date || ''}</span> ${aiBtn('health')}</h2>
 
       <!-- Steps + mini chart -->
       <div style="display:flex;gap:12px;align-items:center;margin:12px 0">
@@ -966,6 +1108,7 @@ function renderAppleHealthTile() {
       </div>
 
       ${weight ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--separator);font-size:12px;color:var(--text-secondary)">⚖️ Health weight: <strong style="color:var(--text-primary)">${weight}</strong>${h.weight_date ? ` <span style="color:var(--text-tertiary)">(${h.weight_date})</span>` : ''}</div>` : ''}
+      ${aiSection('health')}
     </div>`;
 }
 
@@ -1149,4 +1292,6 @@ export function cleanup() {
   _ctx = null;
   _oura = null;
   _health = null;
+  _ouraInsight = { text: null, loading: false, error: null };
+  Object.keys(_insights).forEach(k => { _insights[k] = { text: null, loading: false, error: null }; });
 }
