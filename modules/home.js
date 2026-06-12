@@ -5,7 +5,7 @@
 
 import { getApiKey, generateRecipeDetail } from "../js/ai.js";
 import { getDebrief, getCachedDebrief } from "../js/debrief.js";
-import { refs, dbSet } from "../js/db.js";
+import { refs, dbSet, uid } from "../js/db.js";
 import { fetchWeatherDetail } from "../js/weather.js";
 import { fetchIcalEvents } from "../js/ical.js";
 
@@ -16,6 +16,10 @@ let _dinnerModal = { open: false, loading: false };
 let _debrief = { text: null, loading: false, date: null, error: null };
 let _wx = null;
 let _icalEvents = [];
+
+// ── Claude Assistant state ─────────────────────────────────────
+const BRIDGE = localStorage.getItem("os_bridge_url") || "http://localhost:3333";
+let _ai = { open: false, busy: false, listening: false, msgs: [], input: "" };
 
 // ── Helpers ────────────────────────────────────────────────────
 const _esc = s => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -106,6 +110,15 @@ function render() {
   if (topBar) topBar.classList.add("hidden");
 
   _container.innerHTML = `
+    ${renderAiSheet()}
+    <button id="ai-fab" title="Ask Claude" style="
+      position:fixed;bottom:calc(var(--bottom-nav-height,0px) + 20px);right:20px;
+      width:52px;height:52px;border-radius:50%;
+      background:linear-gradient(135deg,#00D4FF,#0080FF);
+      color:#fff;font-size:22px;display:flex;align-items:center;justify-content:center;
+      box-shadow:0 4px 20px rgba(0,212,255,.45);border:none;cursor:pointer;z-index:900;
+      transition:transform .15s;
+    ">✦</button>
     <div style="padding: var(--space-5); max-width: 1200px; margin: 0 auto;">
 
       <!-- Greeting row -->
@@ -558,9 +571,274 @@ async function openDinnerModal() {
   } else { render(); }
 }
 
+// ── Claude Assistant ────────────────────────────────────────────
+function renderAiSheet() {
+  if (!_ai.open) return "";
+  const hasMic = typeof SpeechRecognition !== "undefined" || typeof webkitSpeechRecognition !== "undefined";
+  const msgs = _ai.msgs.map(m => `
+    <div style="display:flex;flex-direction:${m.role==="user"?"row-reverse":"row"};gap:8px;align-items:flex-start;margin-bottom:12px">
+      <div style="
+        max-width:82%;padding:10px 14px;border-radius:${m.role==="user"?"18px 18px 4px 18px":"18px 18px 18px 4px"};
+        background:${m.role==="user"?"var(--accent)":"var(--bg-surface-2)"};
+        color:${m.role==="user"?"#000":"var(--text-primary)"};
+        font-size:var(--text-sm);line-height:1.5;white-space:pre-wrap;
+      ">${_esc(m.text)}</div>
+    </div>
+  `).join("");
+
+  return `
+    <div id="ai-sheet-backdrop" style="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;backdrop-filter:blur(4px)"></div>
+    <div id="ai-sheet" style="
+      position:fixed;bottom:0;left:0;right:0;z-index:1001;
+      background:var(--bg-surface);border-radius:20px 20px 0 0;
+      border-top:1px solid var(--separator);
+      max-height:80dvh;display:flex;flex-direction:column;
+      animation:slideUp .25s ease;
+    ">
+      <style>@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}</style>
+      <!-- Handle -->
+      <div style="padding:12px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--separator)">
+        <div style="font-size:13px;font-weight:700;color:var(--accent);display:flex;align-items:center;gap:6px">
+          ✦ <span style="color:var(--text-primary)">Ask Claude</span>
+        </div>
+        <button id="ai-close" style="background:none;border:none;color:var(--text-tertiary);font-size:20px;cursor:pointer;padding:0 4px">×</button>
+      </div>
+      <!-- Messages -->
+      <div id="ai-msgs" style="flex:1;overflow-y:auto;padding:16px;min-height:80px;max-height:50dvh">
+        ${msgs || `<div style="color:var(--text-tertiary);font-size:var(--text-sm);text-align:center;padding:24px 0">
+          Ask me anything about your week, or tell me what to add.<br>
+          <span style="font-size:11px;opacity:.7">"What's on this week?" · "Add dentist Friday 2pm" · "Remind me to call Dad" · "How's my protein today?"</span>
+        </div>`}
+        ${_ai.busy ? `<div style="display:flex;gap:4px;padding:8px 0;align-items:center">
+          <div style="width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite"></div>
+          <div style="width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulse 1s .2s infinite"></div>
+          <div style="width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulse 1s .4s infinite"></div>
+          <style>@keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}</style>
+        </div>` : ""}
+      </div>
+      <!-- Input -->
+      <div style="padding:12px;border-top:1px solid var(--separator);display:flex;gap:8px;align-items:flex-end">
+        <textarea id="ai-input" rows="1"
+          placeholder="Ask anything or give a command…"
+          style="flex:1;resize:none;background:var(--bg-surface-2);border:1px solid var(--separator);border-radius:12px;padding:10px 12px;font-size:var(--text-sm);color:var(--text-primary);line-height:1.4;max-height:120px;overflow-y:auto"
+          ${_ai.busy ? "disabled" : ""}
+        >${_esc(_ai.input)}</textarea>
+        ${hasMic ? `<button id="ai-mic" style="width:40px;height:40px;border-radius:50%;background:${_ai.listening?"#EF4444":"var(--bg-surface-2)"};border:1px solid var(--separator);font-size:18px;cursor:pointer;flex-shrink:0">${_ai.listening?"🔴":"🎙️"}</button>` : ""}
+        <button id="ai-send" ${_ai.busy?"disabled":""} style="width:40px;height:40px;border-radius:50%;background:var(--accent);color:#000;font-size:18px;border:none;cursor:pointer;flex-shrink:0;font-weight:700">↑</button>
+      </div>
+    </div>
+  `;
+}
+
+function buildContext() {
+  const S = _ctx.state();
+  const today = new Date();
+  const todayStr = today.toISOString().slice(0, 10);
+  const dow = today.toLocaleDateString("en-US", { weekday: "long" });
+  const allEvents = [...(S.events || []), ..._icalEvents];
+
+  // Next 7 days of events
+  const upcoming = allEvents
+    .filter(e => e.date >= todayStr && e.date <= new Date(today.getTime() + 7*86400000).toISOString().slice(0,10))
+    .sort((a,b) => a.date < b.date ? -1 : 1)
+    .slice(0, 40)
+    .map(e => `${e.date} ${e.time||"all day"}: ${e.title}${e.location ? " @ "+e.location : ""}`)
+    .join("\n");
+
+  // Due reminders
+  const reminders = (S.reminders || [])
+    .filter(r => !r.completed)
+    .slice(0, 20)
+    .map(r => `- ${r.title}${r.due ? " (due "+r.due+")" : ""}${r.list ? " ["+r.list+"]" : ""}`)
+    .join("\n");
+
+  // Contacts needing nudge
+  const contacts = (S.contacts || [])
+    .slice(0, 30)
+    .map(c => `${c.fname} ${c.lname}`)
+    .join(", ");
+
+  // Transformation
+  const txWeight = localStorage.getItem("transformation_weight");
+  const txKey = todayStr.replace(/-/g,"");
+  const txProtein = localStorage.getItem(`transformation_protein_${txKey}`);
+
+  return `You are Claude, the personal assistant inside the Ebberts Command Center app.
+Today is ${dow}, ${todayStr}. The user is Michael Ebberts.
+
+UPCOMING EVENTS (next 7 days):
+${upcoming || "No events found"}
+
+ACTIVE REMINDERS:
+${reminders || "None"}
+
+CONTACTS: ${contacts}
+
+TRANSFORMATION: Current weight: ${txWeight||"unknown"}lbs, Protein today: ${txProtein||"0"}g
+
+YOUR CALENDARS: Family (default), Georgie (George's events), Ebberts Family, Calendar, John Deere Travel
+
+Respond conversationally and helpfully. When the user wants to DO something (add event, add reminder, log weight, etc.), include a JSON actions array at the very end of your response in this exact format — nothing after it:
+
+ACTIONS:
+[{"type":"add_calendar","title":"...","date":"YYYY-MM-DD","time":"HH:mm","endTime":"HH:mm","location":"...","calendar":"Family"},
+ {"type":"add_reminder","title":"...","due":"YYYY-MM-DD","time":"HH:mm","list":"Reminders","priority":"none","notes":"..."}]
+
+Use "add_calendar" for events, "add_reminder" for tasks/reminders. Add emojis to reminder titles like the existing ones. Only include the ACTIONS block when taking action — omit it for pure questions.`;
+}
+
+async function sendToAI(text) {
+  if (!text.trim() || _ai.busy) return;
+  _ai.msgs.push({ role: "user", text: text.trim() });
+  _ai.input = "";
+  _ai.busy = true;
+  renderSheet();
+
+  try {
+    const { getApiKey } = await import("../js/ai.js");
+    const key = getApiKey();
+    const { AI_MODEL } = await import("../js/config.js");
+
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-client-side-api-key-access": "true",
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        max_tokens: 1024,
+        system: buildContext(),
+        messages: _ai.msgs.map(m => ({ role: m.role, content: m.text })),
+      }),
+    });
+
+    const data = await res.json();
+    const full = data.content?.[0]?.text || "Sorry, something went wrong.";
+
+    // Split reply from actions
+    const actionSplit = full.indexOf("\nACTIONS:");
+    const replyText = actionSplit > -1 ? full.slice(0, actionSplit).trim() : full.trim();
+    const actionBlock = actionSplit > -1 ? full.slice(actionSplit + 9).trim() : null;
+
+    _ai.msgs.push({ role: "assistant", text: replyText });
+    _ai.busy = false;
+    renderSheet();
+
+    if (actionBlock) await executeActions(actionBlock);
+  } catch(e) {
+    _ai.msgs.push({ role: "assistant", text: "Something went wrong: " + e.message });
+    _ai.busy = false;
+    renderSheet();
+  }
+}
+
+async function executeActions(actionBlock) {
+  let actions;
+  try { actions = JSON.parse(actionBlock); } catch { return; }
+  if (!Array.isArray(actions)) return;
+
+  for (const a of actions) {
+    if (a.type === "add_calendar") {
+      try {
+        const r = await fetch(`${BRIDGE}/calendar/add`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(a),
+        });
+        const d = await r.json();
+        if (!d.ok) throw new Error("bridge failed");
+        showToast(`📅 "${a.title}" added to ${a.calendar||"Family"}`);
+      } catch {
+        // Fallback: save to Firestore manual events
+        const ev = { id: uid(), title: a.title, date: a.date, time: a.time||"",
+          endTime: a.endTime||"", location: a.location||"", calendar: a.calendar||"Family",
+          color: "#007AFF", source: "manual" };
+        await dbSet(refs.event(ev.id), ev);
+        showToast(`📅 "${a.title}" saved (syncs to Calendar when Mac is reachable)`);
+      }
+    }
+    if (a.type === "add_reminder") {
+      try {
+        const r = await fetch(`${BRIDGE}/reminders/add`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: a.title, due: a.due||"", time: a.time||"",
+            list: a.list||"Reminders", priority: a.priority||"none", notes: a.notes||"" }),
+        });
+        const d = await r.json();
+        if (!d.ok) throw new Error();
+        showToast(`✓ "${a.title}" added to Reminders`);
+      } catch {
+        // Fallback: save to Firestore
+        const rem = { id: uid(), title: a.title, due: a.due||null, completed: false,
+          list: a.list||"Reminders", priority: a.priority||"none", notes: a.notes||"", tags: [] };
+        await dbSet(refs.reminder(rem.id), rem);
+        showToast(`✓ "${a.title}" saved`);
+      }
+    }
+  }
+}
+
+function renderSheet() {
+  // Re-render just the sheet without touching the whole page
+  const existing = document.getElementById("ai-sheet");
+  const backdrop = document.getElementById("ai-sheet-backdrop");
+  if (existing) existing.remove();
+  if (backdrop) backdrop.remove();
+  const fab = document.getElementById("ai-fab");
+  if (fab) fab.insertAdjacentHTML("beforebegin", renderAiSheet());
+  bindAiEvents();
+  // Scroll messages to bottom
+  const msgs = document.getElementById("ai-msgs");
+  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+}
+
 // ── Event binding ───────────────────────────────────────────────
+function bindAiEvents() {
+  const fab  = document.getElementById("ai-fab");
+  const close = document.getElementById("ai-close");
+  const backdrop = document.getElementById("ai-sheet-backdrop");
+  const send  = document.getElementById("ai-send");
+  const input = document.getElementById("ai-input");
+  const mic   = document.getElementById("ai-mic");
+
+  if (fab)  fab.onclick  = () => { _ai.open = true; render(); setTimeout(() => { document.getElementById("ai-input")?.focus(); document.getElementById("ai-msgs").scrollTop = 9999; }, 80); };
+  if (close) close.onclick = () => { _ai.open = false; render(); };
+  if (backdrop) backdrop.onclick = () => { _ai.open = false; render(); };
+
+  if (input) {
+    input.addEventListener("input",   e => { _ai.input = e.target.value; autoResize(e.target); });
+    input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendToAI(input.value); } });
+  }
+  if (send) send.onclick = () => sendToAI(document.getElementById("ai-input")?.value || _ai.input);
+
+  if (mic) {
+    mic.onclick = () => {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR || _ai.listening) return;
+      const rec = new SR();
+      rec.lang = "en-US"; rec.interimResults = false;
+      _ai.listening = true; renderSheet();
+      rec.onresult = e => {
+        const t = e.results[0][0].transcript;
+        _ai.listening = false;
+        sendToAI(t);
+      };
+      rec.onerror = rec.onend = () => { _ai.listening = false; renderSheet(); };
+      rec.start();
+    };
+  }
+}
+
+function autoResize(el) {
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 120) + "px";
+}
+
 function bindEvents() {
   if (!_container) return;
+  bindAiEvents();
 
   _container.querySelectorAll("[data-nav]").forEach(el => {
     el.addEventListener("click", e => {
@@ -665,6 +943,7 @@ export function cleanup() {
   _unsubscribes.forEach(u => u?.());
   _unsubscribes = [];
   _dinnerModal = { open: false, loading: false };
+  _ai = { open: false, busy: false, listening: false, msgs: [], input: "" };
   _wx = null;
   _icalEvents = [];
   _container = null;
