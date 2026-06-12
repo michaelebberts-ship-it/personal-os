@@ -116,8 +116,7 @@ async function qtLog() {
 function renderQuickTextSheet() {
   if (!_state.showQt) return "";
   const c = _state.qtContact, draft = _state.qtDraft;
-  const phone = c?.phone ? String(c.phone).replace(/\D/g,"") : null;
-  const smsLink = phone && draft ? `sms:+${phone}?body=${encodeURIComponent(draft)}` : null;
+  const smsLink = c?.phone && draft ? `sms:+${telDigits(c.phone)}?body=${encodeURIComponent(draft)}` : null;
   return `
     <div id="qt-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:700;display:flex;align-items:flex-end;justify-content:center">
       <div style="background:var(--bg-surface);border-radius:22px 22px 0 0;padding:20px;width:100%;max-width:540px;padding-bottom:calc(20px + env(safe-area-inset-bottom))">
