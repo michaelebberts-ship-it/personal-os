@@ -11,6 +11,7 @@ let _styleEl = null;
 let _oura = null;       // cached Oura payload
 let _ouraExpanded = false;
 let _ouraInsight = { text: null, loading: false, error: null };
+let _health = null;     // Apple Health payload
 
 // ── Gold accent (transformation identity color) ───────────────
 const GOLD = '#C9A961';
@@ -490,6 +491,8 @@ function render() {
 
       ${renderOuraTile()}
 
+      ${renderAppleHealthTile()}
+
       <div class="txm-grid">
 
         <div class="txm-card txm-workout-card">
@@ -837,6 +840,48 @@ function stopOuraPolling() {
   _ouraFsPollTimer = null;
 }
 
+// ── Apple Health fetch ─────────────────────────────────────────────────────
+
+const HEALTH_FS_URL = `https://firestore.googleapis.com/v1/projects/inner-circle-crm/databases/(default)/documents/users/owner-inner-circle-crm/sync/apple_health?key=AIzaSyDINHNV1Ze3QfhXwBPwe22LnUe-xxnU-n4`;
+
+async function fetchAppleHealth() {
+  // Try bridge first (Mac), then Firestore fallback (iPhone)
+  try {
+    const BRIDGE = localStorage.getItem("os_bridge_url") || "http://localhost:3333";
+    const res = await fetch(`${BRIDGE}/apple-health`, { signal: AbortSignal.timeout(4000) });
+    const data = await res.json();
+    if (data.ok) { _health = data; render(); return; }
+  } catch {}
+
+  // Firestore fallback
+  try {
+    const res = await fetch(HEALTH_FS_URL);
+    const doc = await res.json();
+    const f = doc.fields;
+    if (!f) return;
+    const num = (k) => f[k] ? (parseFloat(f[k].doubleValue ?? f[k].integerValue ?? 0) || null) : null;
+    const str = (k) => f[k]?.stringValue || null;
+    const arr = (k) => f[k]?.arrayValue?.values?.map(v => {
+      const m = v.mapValue?.fields || {};
+      return { date: m.date?.stringValue, steps: parseInt(m.steps?.integerValue ?? 0) };
+    }) || null;
+    _health = {
+      ok: true,
+      date: str("date"),
+      steps_today:             num("steps_today"),
+      calories_active_today:   num("calories_active_today"),
+      exercise_minutes_today:  num("exercise_minutes_today"),
+      stand_hours_today:       num("stand_hours_today"),
+      weight_lbs:              num("weight_lbs"),
+      weight_date:             str("weight_date"),
+      vo2_max:                 num("vo2_max"),
+      resting_hr:              num("resting_hr"),
+      steps_7day:              arr("steps_7day"),
+    };
+    render();
+  } catch {}
+}
+
 function secToHM(sec) {
   if (!sec) return '—';
   const h = Math.floor(sec / 3600);
@@ -851,21 +896,105 @@ function scoreColor(n) {
   return 'var(--color-red)';
 }
 
+function renderAppleHealthTile() {
+  const h = _health;
+  if (!h) return `
+    <div class="txm-card txm-oura-card">
+      <h2>Apple Health <span class="txm-badge">Activity</span></h2>
+      <div style="padding:14px 0;text-align:center;color:var(--text-tertiary);font-size:13px">
+        Run <code style="color:var(--accent)">./compile_health.sh</code> once, then restart the bridge.
+      </div>
+    </div>`;
+
+  if (!h.ok) return `
+    <div class="txm-card txm-oura-card">
+      <h2>Apple Health <span class="txm-badge">Activity</span></h2>
+      <div style="padding:14px 0;text-align:center;color:var(--text-tertiary);font-size:13px">
+        ${h.error === 'binary_missing'
+          ? 'Run <code style="color:var(--accent)">./compile_health.sh</code> to set up.'
+          : h.error || 'Waiting for data…'}
+      </div>
+    </div>`;
+
+  const steps   = h.steps_today   != null ? Math.round(h.steps_today).toLocaleString() : '—';
+  const cals    = h.calories_active_today   != null ? Math.round(h.calories_active_today)   : null;
+  const exMin   = h.exercise_minutes_today  != null ? Math.round(h.exercise_minutes_today)  : null;
+  const stand   = h.stand_hours_today       != null ? Math.round(h.stand_hours_today)        : null;
+  const weight  = h.weight_lbs  != null ? h.weight_lbs.toFixed(1) + ' lbs' : null;
+  const vo2     = h.vo2_max     != null ? h.vo2_max.toFixed(1) : null;
+
+  // Mini step chart — 7 days
+  const days7 = h.steps_7day || [];
+  const maxSteps = Math.max(...days7.map(d => d.steps), 1);
+  const GOAL = 10000;
+  const chartBars = days7.map(d => {
+    const pct  = Math.round((d.steps / maxSteps) * 100);
+    const hit  = d.steps >= GOAL;
+    const color = hit ? 'var(--color-green)' : d.steps > 5000 ? GOLD : 'var(--color-red)';
+    const dayLabel = d.date ? new Date(d.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'narrow' }) : '';
+    return `<div style="display:flex;flex-direction:column;align-items:center;gap:3px;flex:1">
+      <div style="width:100%;height:40px;display:flex;align-items:flex-end">
+        <div style="width:100%;height:${pct}%;background:${color};border-radius:3px 3px 0 0;min-height:2px;transition:height .3s"></div>
+      </div>
+      <div style="font-size:9px;color:var(--text-tertiary)">${dayLabel}</div>
+    </div>`;
+  }).join('');
+
+  const statBox = (icon, val, label, color = 'var(--text-primary)') => val != null ? `
+    <div style="background:var(--bg-surface-2);border-radius:10px;padding:10px 8px;text-align:center">
+      <div style="font-size:10px;margin-bottom:3px">${icon}</div>
+      <div style="font-size:18px;font-weight:800;color:${color};font-family:'Space Grotesk',sans-serif;line-height:1">${val}</div>
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);margin-top:3px">${label}</div>
+    </div>` : '';
+
+  const stepColor = h.steps_today >= GOAL ? 'var(--color-green)' : h.steps_today >= 6000 ? GOLD : 'var(--color-red)';
+
+  return `
+    <div class="txm-card txm-oura-card">
+      <h2>Apple Health <span style="font-size:10px;color:var(--text-tertiary);font-weight:400;text-transform:none;letter-spacing:0">${h.date || ''}</span></h2>
+
+      <!-- Steps + mini chart -->
+      <div style="display:flex;gap:12px;align-items:center;margin:12px 0">
+        <div style="flex-shrink:0;text-align:center">
+          <div style="font-size:28px;font-weight:800;color:${stepColor};font-family:'Space Grotesk',sans-serif;line-height:1">${steps}</div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);margin-top:3px">Steps today</div>
+          <div style="font-size:10px;color:${stepColor};margin-top:2px">${h.steps_today >= GOAL ? '✓ Goal' : 'Goal: 10k'}</div>
+        </div>
+        <div style="flex:1;display:flex;gap:3px;align-items:flex-end;height:56px">${chartBars}</div>
+      </div>
+
+      <!-- Activity stats grid -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+        ${statBox('🔥', cals != null ? cals + ' kcal' : null, 'Active Cal', 'var(--color-red)')}
+        ${statBox('⏱️', exMin != null ? exMin + ' min' : null, 'Exercise', 'var(--color-green)')}
+        ${statBox('🧍', stand != null ? stand + ' hrs' : null, 'Stand', 'var(--accent)')}
+        ${statBox('💨', vo2 != null ? vo2 : null, 'VO2 Max', GOLD)}
+      </div>
+
+      ${weight ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--separator);font-size:12px;color:var(--text-secondary)">⚖️ Health weight: <strong style="color:var(--text-primary)">${weight}</strong>${h.weight_date ? ` <span style="color:var(--text-tertiary)">(${h.weight_date})</span>` : ''}</div>` : ''}
+    </div>`;
+}
+
 async function generateSleepInsight() {
   if (!_oura) return;
   _ouraInsight = { text: null, loading: true, error: null };
   render();
   const o = _oura;
   const contrib = o.sleep_contributors || {};
-  const prompt = `You are a health coach giving Michael a plain-English interpretation of his Oura Ring sleep data. Be direct, specific, and actionable. 3-4 sentences max.
+  const h = _health;
+  const healthLine = h?.ok ? `
+Yesterday's activity: ${h.steps_today ?? '—'} steps, ${h.calories_active_today ?? '—'} active kcal, ${h.exercise_minutes_today ?? '—'} min exercise, ${h.stand_hours_today ?? '—'} stand hours. VO2 Max: ${h.vo2_max ?? '—'}.` : '';
 
-Last night's data (${o.date || 'last night'}):
+  const prompt = `You are a health coach giving Michael a plain-English interpretation of his sleep and activity data. Be direct, specific, and actionable. 3-4 sentences max.
+
+Sleep data (${o.date || 'last night'}):
 - Sleep Score: ${o.sleep_score ?? '—'} | Readiness: ${o.readiness_score ?? '—'}
-- Total Sleep: ${secToHM(o.total_sleep_sec)} | Deep: ${secToHM(o.deep_sleep_sec)} | REM: ${secToHM(o.rem_sleep_sec)}
+- Total: ${secToHM(o.total_sleep_sec)} | Deep: ${secToHM(o.deep_sleep_sec)} | REM: ${secToHM(o.rem_sleep_sec)}
 - HRV: ${o.avg_hrv ?? '—'} ms | Resting HR: ${o.resting_hr ?? '—'} bpm
-- Contributors: Deep Sleep ${contrib.deep_sleep ?? '—'}, REM ${contrib.rem_sleep ?? '—'}, Efficiency ${contrib.efficiency ?? '—'}, Restfulness ${contrib.restfulness ?? '—'}, Timing ${contrib.timing ?? '—'}
+- Contributors: Deep ${contrib.deep_sleep ?? '—'}, REM ${contrib.rem_sleep ?? '—'}, Efficiency ${contrib.efficiency ?? '—'}, Restfulness ${contrib.restfulness ?? '—'}, Timing ${contrib.timing ?? '—'}
+${healthLine}
 
-What does this mean for Michael today? Highlight 1-2 specific strengths and 1 thing to work on. No bullet points — write it as a natural paragraph.`;
+What does this mean for Michael today? Connect sleep quality to his energy and readiness for training. Highlight 1-2 strengths and 1 thing to improve. Natural paragraph, no bullet points.`;
 
   try {
     const { callAI } = await import('../js/ai.js');
@@ -1000,8 +1129,9 @@ export async function init(container, ctx) {
   txLoad();   // localStorage first (instant)
   render();
   txLoadFirestore().then(loaded => { if (loaded) render(); }); // Firestore overrides if newer
-  fetchOura();       // async — re-renders when data arrives
-  startOuraPolling(); // poll Firestore every 5 min for cross-device sync
+  fetchOura();          // async — re-renders when data arrives
+  startOuraPolling();   // poll Firestore every 5 min for cross-device sync
+  fetchAppleHealth();   // Apple Health via bridge or Firestore
   _interval = setInterval(() => {
     const key = todayKey();
     if (key !== window._txmDateKey) {
@@ -1024,4 +1154,5 @@ export function cleanup() {
   _container = null;
   _ctx = null;
   _oura = null;
+  _health = null;
 }
