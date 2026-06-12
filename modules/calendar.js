@@ -84,7 +84,10 @@ async function fetchIcal() {
     const { setState } = await import("../js/state.js");
     setState({ icalEvents: _local.icalEvents, calLastSync: _local.icalLastFetch });
   } catch (e) {
-    _local.icalError = e.message;
+    // Bridge unreachable (e.g. on iPhone away from Mac) — show Firestore-synced events silently
+    const bridgeDown = e.name === 'AbortError' || e.message.includes('Failed to fetch') || e.message.includes('NetworkError') || e.message.includes('Load failed');
+    if (!bridgeDown) _local.icalError = e.message;
+    _local.icalEvents = _ctx.state().events || [];
   } finally {
     _local.icalLoading = false;
     render();
