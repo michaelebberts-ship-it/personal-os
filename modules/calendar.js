@@ -598,7 +598,7 @@ Return ONLY a JSON object (no markdown) with these keys:
 - time: start time as "HH:mm" 24-hour, or "" if not mentioned
 - endTime: end time as "HH:mm" 24-hour, or "" if not mentioned
 - location: location string, or ""
-- calendar: best calendar name like "Personal", "Family", "Work", or "iCloud"
+- calendar: best match from your actual calendars: "Family" (default), "Georgie" (for George's events), "Ebberts Family", "Calendar", "John Deere Travel" (work travel)
 - notes: any extra detail, or ""`;
 
   const parsed = await callAIJson(prompt, null, { maxTokens: 300 });
