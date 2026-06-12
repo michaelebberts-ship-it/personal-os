@@ -849,7 +849,8 @@ function renderChart() {
 // ── Event binding (delegation on container) ────────────────────
 function bindEvents() {
   if (!_container) return;
-  _container.addEventListener('click', handleClick, { once: true });
+  _container.removeEventListener('click', handleClick);
+  _container.addEventListener('click', handleClick);
 
   const wi = _container.querySelector('#txm-weight-input');
   const pi = _container.querySelector('#txm-protein-input');
@@ -859,7 +860,7 @@ function bindEvents() {
 
 function handleClick(e) {
   const el = e.target.closest('[data-txm]');
-  if (!el) { if (_container) _container.addEventListener('click', handleClick, { once: true }); return; }
+  if (!el) return;
   const action = el.dataset.txm;
 
   if (action === 'log-weight')    { doLogWeight(); }
@@ -879,7 +880,6 @@ function handleClick(e) {
   else if (action === 'export')   { doExport(); }
   else if (action === 'import')   { doImport(); }
 
-  if (_container) _container.addEventListener('click', handleClick, { once: true });
 }
 
 function doLogWeight() {
