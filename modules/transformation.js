@@ -189,6 +189,8 @@ const todayKey = () => new Date().toISOString().slice(0, 10);
 const weekKey = () => { const d = new Date(), s = new Date(d); s.setDate(d.getDate() - d.getDay()); return s.toISOString().slice(0, 10); };
 
 // ── Storage ────────────────────────────────────────────────────
+const TXM_FS_URL = `https://firestore.googleapis.com/v1/projects/inner-circle-crm/databases/(default)/documents/users/owner-inner-circle-crm/sync/transformation?key=AIzaSyDINHNV1Ze3QfhXwBPwe22LnUe-xxnU-n4`;
+
 function txSave() {
   try {
     localStorage.setItem('transformation_weight', S.weight);
@@ -204,6 +206,57 @@ function txSave() {
     localStorage.setItem('transformation_pullup_history', JSON.stringify(pH));
     localStorage.setItem('transformation_recovery_' + weekKey(), JSON.stringify(S.recovery));
   } catch (e) { console.error('Save error:', e); }
+  // Mirror to Firestore for cross-device sync
+  txPushFirestore();
+}
+
+function txPushFirestore() {
+  const wH = JSON.parse(localStorage.getItem('transformation_weight_history') || '{}');
+  const pH = JSON.parse(localStorage.getItem('transformation_pullup_history') || '{}');
+  const payload = {
+    weight:        { doubleValue: S.weight },
+    protein:       { integerValue: String(S.protein) },
+    pullup:        { stringValue: JSON.stringify(S.pullup) },
+    checks:        { stringValue: JSON.stringify(S.checks) },
+    weekDone:      { stringValue: JSON.stringify(S.weekDone) },
+    recovery:      { stringValue: JSON.stringify(S.recovery) },
+    weightHistory: { stringValue: JSON.stringify(wH) },
+    pullupHistory: { stringValue: JSON.stringify(pH) },
+    dateKey:       { stringValue: todayKey() },
+    weekKey_:      { stringValue: weekKey() },
+    lastSync:      { timestampValue: new Date().toISOString() },
+  };
+  fetch(TXM_FS_URL, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: payload }),
+  }).catch(() => {}); // silent fail — localStorage is the source of truth
+}
+
+async function txLoadFirestore() {
+  try {
+    const res = await fetch(TXM_FS_URL);
+    if (!res.ok) return false;
+    const doc = await res.json();
+    const f = doc.fields;
+    if (!f) return false;
+    const fsDateKey = f.dateKey?.stringValue;
+    const fsWeekKey = f.weekKey_?.stringValue;
+    // Only load if Firestore has today's / this week's data
+    if (fsDateKey === todayKey()) {
+      if (f.weight?.doubleValue)   S.weight  = f.weight.doubleValue;
+      if (f.protein?.integerValue) S.protein = parseInt(f.protein.integerValue);
+      if (f.checks?.stringValue)   S.checks  = JSON.parse(f.checks.stringValue);
+      if (f.pullup?.stringValue)   S.pullup  = JSON.parse(f.pullup.stringValue);
+    }
+    if (fsWeekKey === weekKey()) {
+      if (f.weekDone?.stringValue)  S.weekDone = JSON.parse(f.weekDone.stringValue);
+      if (f.recovery?.stringValue)  S.recovery = JSON.parse(f.recovery.stringValue);
+    }
+    if (f.weightHistory?.stringValue) localStorage.setItem('transformation_weight_history', f.weightHistory.stringValue);
+    if (f.pullupHistory?.stringValue) localStorage.setItem('transformation_pullup_history', f.pullupHistory.stringValue);
+    return true;
+  } catch { return false; }
 }
 
 function txLoad() {
@@ -875,8 +928,9 @@ export async function init(container, ctx) {
   _container = container;
   _ctx = ctx;
   injectStyles();
-  txLoad();
+  txLoad();   // localStorage first (instant)
   render();
+  txLoadFirestore().then(loaded => { if (loaded) render(); }); // Firestore overrides if newer
   fetchOura();       // async — re-renders when data arrives
   startOuraPolling(); // poll Firestore every 5 min for cross-device sync
   _interval = setInterval(() => {
