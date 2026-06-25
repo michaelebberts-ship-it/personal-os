@@ -319,17 +319,14 @@
     list-style: none;
     display: flex;
     height: 100%;
-    overflow-x: scroll;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    scroll-snap-type: x proximity;
+    overflow: hidden;
   }
-  .bottom-nav-list::-webkit-scrollbar { display: none; }
+  .bottom-nav-list > li {
+    flex: 1;
+  }
 
   .bottom-item {
-    flex: 0 0 72px;
-    scroll-snap-align: start;
+    width: 100%;
     display: flex;
     flex-direction: column;
     align-items: center;
