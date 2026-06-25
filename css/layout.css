@@ -346,6 +346,91 @@
   .mission-strip .ms-weather { display: none; }
 }
 
+/* ── Household quick-access button (mission strip) ───────────── */
+.ms-household-btn {
+  display: none;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+}
+@media (max-width: 768px) {
+  .ms-household-btn { display: flex; align-items: center; }
+}
+
+/* ── More sheet (mobile overflow nav) ───────────────────────── */
+#more-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 200;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+#more-overlay.is-open {
+  display: block;
+  opacity: 1;
+}
+
+#more-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--bg-elevated);
+  border-radius: 20px 20px 0 0;
+  padding: 12px 20px calc(env(safe-area-inset-bottom, 0px) + 28px);
+  z-index: 201;
+  transform: translateY(100%);
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+}
+#more-sheet.is-open {
+  transform: translateY(0);
+}
+
+.more-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--separator);
+  border-radius: 2px;
+  margin: 0 auto 20px;
+}
+
+.more-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
+.more-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 8px 12px;
+  background: var(--bg-surface-2);
+  border-radius: 14px;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  transition: background 0.15s ease;
+}
+.more-item--active {
+  background: var(--accent-light);
+}
+.more-item__icon  { font-size: 26px; line-height: 1; }
+.more-item__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.more-item--active .more-item__label { color: var(--accent); }
+
 /* ── Module content wrapper ──────────────────────────────────── */
 .module-content {
   padding: var(--space-5);

@@ -9,6 +9,10 @@ import { initProfileSwitcher, canEdit } from "./identity.js";
 // Version stamp — busts ES module cache on every page load
 const _V = Date.now();
 
+// Bottom nav: pinned tabs on mobile (everything else goes in "More")
+const MOBILE_PINNED = ['home', 'calendar', 'reminders', 'transformation'];
+let _moreOpen = false;
+
 // ── DOM refs ──────────────────────────────────────────────────
 const navList       = document.getElementById("nav-list");
 const bottomNavList = document.getElementById("bottom-nav-list");
@@ -66,26 +70,111 @@ function buildNav() {
     </li>
   `).join("");
 
-  // Mobile bottom nav (all modules, scrollable)
-  bottomNavList.innerHTML = modules.map(m => `
+  // Mobile bottom nav — 4 pinned tabs + "More" sheet
+  const pinned   = modules.filter(m => MOBILE_PINNED.includes(m.id));
+  const overflow = modules.filter(m => !MOBILE_PINNED.includes(m.id));
+  const overflowActive = overflow.some(m => m.id === current);
+
+  bottomNavList.innerHTML = pinned.map(m => `
     <li>
-      <button
-        class="bottom-item ${m.id === current ? "bottom-item--active" : ""}"
-        data-module="${m.id}"
-      >
+      <button class="bottom-item ${m.id === current ? "bottom-item--active" : ""}" data-module="${m.id}">
         <span class="bottom-item__icon">${m.icon}</span>
-        <span class="bottom-item__label">${m.name}</span>
+        <span class="bottom-item__label">${m.shortName || m.name}</span>
       </button>
     </li>
-  `).join("");
+  `).join("") + `
+    <li>
+      <button class="bottom-item ${overflowActive ? "bottom-item--active" : ""}" id="more-btn">
+        <span class="bottom-item__icon" style="font-size:18px;font-weight:700;letter-spacing:1px">···</span>
+        <span class="bottom-item__label">More</span>
+      </button>
+    </li>`;
 
-  // Event delegation
-  [navList, bottomNavList].forEach(el => {
-    el.onclick = e => {
-      const btn = e.target.closest("[data-module]");
-      if (btn) navigate(btn.dataset.module);
-    };
+  bottomNavList.onclick = e => {
+    const btn = e.target.closest("[data-module]");
+    if (btn) { closeMoreSheet(); navigate(btn.dataset.module); return; }
+    if (e.target.closest("#more-btn")) toggleMoreSheet(overflow, current);
+  };
+
+  navList.onclick = e => {
+    const btn = e.target.closest("[data-module]");
+    if (btn) navigate(btn.dataset.module);
+  };
+
+  // Keep More sheet grid in sync if open
+  if (_moreOpen) updateMoreSheet(overflow, current);
+}
+
+// ── More sheet (mobile overflow nav) ──────────────────────────
+function ensureMoreSheet() {
+  if (document.getElementById('more-sheet')) return;
+
+  // Inject styles directly so they aren't subject to CSS file caching
+  if (!document.getElementById('more-sheet-styles')) {
+    const style = document.createElement('style');
+    style.id = 'more-sheet-styles';
+    style.textContent = `
+      #more-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;opacity:0;transition:opacity .25s ease}
+      #more-overlay.is-open{display:block;opacity:1}
+      #more-sheet{position:fixed;bottom:0;left:0;right:0;background:var(--bg-elevated);border-radius:20px 20px 0 0;padding:12px 20px calc(env(safe-area-inset-bottom,0px) + 28px);z-index:201;transform:translateY(100%);transition:transform .3s cubic-bezier(.32,.72,0,1)}
+      #more-sheet.is-open{transform:translateY(0)}
+      .more-handle{width:36px;height:4px;background:var(--separator);border-radius:2px;margin:0 auto 20px}
+      .more-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+      .more-item{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px 12px;background:var(--bg-surface-2);border-radius:14px;border:none;cursor:pointer;font-family:var(--font-sans);transition:background .15s ease}
+      .more-item--active{background:var(--accent-light)}
+      .more-item__icon{font-size:26px;line-height:1}
+      .more-item__label{font-size:11px;font-weight:600;color:var(--text-secondary);white-space:nowrap}
+      .more-item--active .more-item__label{color:var(--accent)}
+      .ms-household-btn{background:var(--bg-surface-2);border:1px solid var(--separator);border-radius:999px;padding:4px 10px;font-size:16px;cursor:pointer;line-height:1;display:none;align-items:center}
+      @media(max-width:768px){.ms-household-btn{display:flex}}
+    `;
+    document.head.appendChild(style);
+  }
+
+  const overlay = document.createElement('div');
+  overlay.id = 'more-overlay';
+  overlay.addEventListener('click', closeMoreSheet);
+
+  const sheet = document.createElement('div');
+  sheet.id = 'more-sheet';
+  sheet.innerHTML = `
+    <div class="more-handle"></div>
+    <div class="more-grid" id="more-grid"></div>
+  `;
+
+  document.body.appendChild(overlay);
+  document.body.appendChild(sheet);
+
+  document.getElementById('more-grid').addEventListener('click', e => {
+    const btn = e.target.closest('[data-module]');
+    if (btn) { closeMoreSheet(); navigate(btn.dataset.module); }
   });
+}
+
+function updateMoreSheet(overflow, current) {
+  const grid = document.getElementById('more-grid');
+  if (!grid) return;
+  grid.innerHTML = overflow.map(m => `
+    <button class="more-item ${m.id === current ? 'more-item--active' : ''}" data-module="${m.id}">
+      <span class="more-item__icon">${m.icon}</span>
+      <span class="more-item__label">${m.shortName || m.name}</span>
+    </button>
+  `).join('');
+}
+
+function toggleMoreSheet(overflow, current) {
+  ensureMoreSheet();
+  if (_moreOpen) { closeMoreSheet(); return; }
+  _moreOpen = true;
+  updateMoreSheet(overflow, current);
+  document.getElementById('more-sheet').classList.add('is-open');
+  document.getElementById('more-overlay').classList.add('is-open');
+}
+
+function closeMoreSheet() {
+  _moreOpen = false;
+  document.getElementById('more-sheet')?.classList.remove('is-open');
+  document.getElementById('more-overlay')?.classList.remove('is-open');
 }
 
 // ── Module loading ─────────────────────────────────────────────
@@ -240,6 +329,12 @@ async function boot() {
 
   // Profile switcher in the mission strip (Family OS identity)
   initProfileSwitcher();
+
+  // Household quick-access button (mobile mission strip)
+  document.getElementById('ms-household-btn')?.addEventListener('click', () => {
+    closeMoreSheet();
+    navigate('household');
+  });
 
   // Global AI assistant (persists across all modules)
   initGlobalAI(navigate);
