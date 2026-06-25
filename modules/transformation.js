@@ -1571,6 +1571,7 @@ function renderOuraTile() {
         <div class="txm-oura-score-box${_ouraSection==='activity'?' active':''}" data-txm="oura-section" data-section="activity">
           <div class="txm-oura-score-num" style="color:${scoreColor(actScore)}">${actScore ?? '—'}</div>
           <div class="txm-oura-score-label">🏃 Activity</div>
+          ${(() => { const tod = new Date().toISOString().slice(0,10); const yes = new Date(Date.now()-86400000).toISOString().slice(0,10); return o.date === tod ? `<div style="font-size:9px;color:var(--color-green);font-weight:600;margin-top:2px">live today</div>` : o.date === yes ? `<div style="font-size:9px;color:${GOLD};font-weight:600;margin-top:2px">yesterday</div>` : o.date ? `<div style="font-size:9px;color:var(--text-tertiary);margin-top:2px">${o.date}</div>` : ''; })()}
         </div>
       </div>
 
@@ -1669,16 +1670,26 @@ function renderOuraTile() {
       ${_ouraSection === 'activity' ? (() => {
         const todayStr = new Date().toISOString().slice(0,10);
         const yesterStr = new Date(Date.now()-86400000).toISOString().slice(0,10);
-        const recentW = (Array.isArray(o.workouts) ? o.workouts : [])
-          .filter(w => w.day === todayStr || w.day === yesterStr);
+        const allW = Array.isArray(o.workouts) ? o.workouts : [];
+        const todayW  = allW.filter(w => w.day === todayStr);
+        const yesterW = allW.filter(w => w.day === yesterStr);
+        const mkRow = w => workoutRow({ activity: fmtWorkoutName(w.activity), date: w.day,
+          duration_min: w.duration_min, calories: w.calories||null,
+          distance_km: w.distance_km > 0.1 ? w.distance_km : null, source: 'Oura' }, true);
         return `
         <div style="padding-top:12px;border-top:1px solid var(--separator);margin-top:4px">
-          ${recentW.length ? `
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:2px">Today's Activity</div>
-            ${recentW.map(w => workoutRow({ activity: fmtWorkoutName(w.activity), date: w.day,
-              duration_min: w.duration_min, calories: w.calories||null,
-              distance_km: w.distance_km > 0.1 ? w.distance_km : null, source: 'Oura' }, true)).join('')}
+          ${todayW.length ? `
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:2px">Today's Workouts</div>
+            ${todayW.map(mkRow).join('')}
             <div style="margin-top:10px"></div>
+          ` : ''}
+          ${yesterW.length ? `
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:${GOLD};font-weight:700;margin-bottom:2px">Yesterday's Workouts</div>
+            ${yesterW.map(mkRow).join('')}
+            <div style="margin-top:10px"></div>
+          ` : ''}
+          ${!todayW.length && !yesterW.length ? `
+            <div style="font-size:12px;color:var(--text-tertiary);padding:6px 0">No workouts logged in the last 2 days.</div>
           ` : ''}
           ${Object.keys(actContrib).length ? `
             <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:4px">Activity Contributors</div>
