@@ -2,7 +2,7 @@
 // Strategy: network-first with cache fallback.
 // New deploys take effect immediately via skipWaiting.
 
-const CACHE = 'ecc-v1';
+const CACHE = 'ecc-v2';
 
 const PRECACHE = [
   './',
@@ -59,7 +59,7 @@ self.addEventListener('fetch', e => {
       url.hostname.includes('firestore.googleapis') || url.hostname.includes('firebase')) return;
 
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'no-store' })
       .then(res => {
         // Cache a clone of successful responses
         if (res.ok) {

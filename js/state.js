@@ -28,9 +28,17 @@ let _state = {
   // Household tasks
   householdTasks: [],
 
+  // Rewards catalog (chore points redemption)
+  rewards: [],
+
   // Family members & schedules
   familyMembers: [],
   familySchedule: [],
+
+  // Canonical household identity (Family OS) — separate from familyMembers.
+  // `activeMember` = who is "using" this device; "household" = wall/shared mode.
+  members: [],
+  activeMember: "household",
 
   // Email briefs
   emailBriefs: [],

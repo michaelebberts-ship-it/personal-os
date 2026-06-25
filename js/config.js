@@ -19,16 +19,16 @@ export const BRIDGE_URL = localStorage.getItem("os_bridge_url") || "http://local
 // Module registry — controls sidebar order, icons, colors
 // shortName = label under icon in 64px sidebar (max ~5 chars)
 export const MODULES = [
-  { id: "home",      name: "Home",       shortName: "Home",  icon: "⊞",  color: "#007AFF", desc: "Command dashboard" },
+  { id: "home",      name: "Home",       shortName: "Today", icon: "⊞",  color: "#007AFF", desc: "Command dashboard" },
   { id: "calendar",  name: "Calendar",   shortName: "Cal",   icon: "📅", color: "#FF3B30", desc: "Schedule" },
   { id: "reminders", name: "Reminders",  shortName: "Tasks", icon: "✓",  color: "#FF9500", desc: "To-dos" },
-  { id: "crm",       name: "Contacts",   shortName: "CRM",   icon: "👥", color: "#00D4FF", desc: "Inner circle" },
-  { id: "finances",  name: "Finances",   shortName: "Money", icon: "💰", color: "#34C759", desc: "Budget & bills" },
+  { id: "crm",       name: "Contacts",   shortName: "CRM",   icon: "👥", color: "#00D4FF", desc: "Inner circle", scope: "crm" },
+  { id: "finances",  name: "Finances",   shortName: "Money", icon: "💰", color: "#34C759", desc: "Budget & bills", scope: "finances" },
   { id: "meals",     name: "Meals",      shortName: "Meals", icon: "🍽️", color: "#FF9F0A", desc: "Meal prep" },
   { id: "family",    name: "Family",     shortName: "Fam",   icon: "👨‍👩‍👧‍👦", color: "#AF52DE", desc: "Family OS" },
   { id: "household", name: "Household",  shortName: "Home",  icon: "🏠", color: "#5AC8FA", desc: "Home ops" },
   { id: "email",          name: "Email",          shortName: "Email",  icon: "📧", color: "#FF2D55", desc: "Daily brief" },
-  { id: "transformation", name: "Transformation",  shortName: "Fit",    icon: "💪", color: "#C9A961", desc: "Dad Bod → Year 40" },
+  { id: "transformation", name: "Daily Health",  shortName: "Health",    icon: "💪", color: "#C9A961", desc: "Health & Vitals" },
 ];
 
 export const COLORS = ["#FF6B35","#3498DB","#2ECC71","#9B59B6","#E91E63","#F39C12","#1ABC9C","#E74C3C"];

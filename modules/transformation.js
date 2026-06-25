@@ -9,9 +9,12 @@ let _ctx = null;
 let _interval = null;
 let _styleEl = null;
 let _oura = null;       // cached Oura payload
-let _ouraExpanded = false;
+let _ouraSection = null; // null | 'sleep' | 'readiness' | 'activity'
+let _workoutsExpanded = false;
+let _shortcutWorkouts = []; // Apple Health workouts via iOS Shortcut → iCloud Drive
 let _ouraInsight = { text: null, loading: false, error: null };
 let _health = null;     // Apple Health payload
+let _renpho = null;    // Full RENPHO body-comp payload
 const _insights = {
   health: { text: null, loading: false, error: null },
   weight: { text: null, loading: false, error: null },
@@ -195,7 +198,7 @@ const S = {
   weight: 200, checks: {}, protein: 0,
   pullup: { hang: 15, neg: 3, rows: 8 },
   weekDone: {}, activeTab: 'today',
-  workoutExpanded: true, activeChart: 'weight',
+  workoutExpanded: true, activeChart: 'weight', chartRange: '3M',
   recovery: { sauna: 0, ice: 0 }, // weekly minutes
 };
 const START_WEIGHT = 200, GOAL_WEIGHT = 170, PROTEIN_TARGET = 165;
@@ -271,7 +274,12 @@ async function txLoadFirestore() {
       if (f.weekDone?.stringValue)  S.weekDone = JSON.parse(f.weekDone.stringValue);
       if (f.recovery?.stringValue)  S.recovery = JSON.parse(f.recovery.stringValue);
     }
-    if (f.weightHistory?.stringValue) localStorage.setItem('transformation_weight_history', f.weightHistory.stringValue);
+    if (f.weightHistory?.stringValue) {
+      // Merge: local entries win (may already have RENPHO's full history)
+      const fsWH    = JSON.parse(f.weightHistory.stringValue || '{}');
+      const localWH = JSON.parse(localStorage.getItem('transformation_weight_history') || '{}');
+      localStorage.setItem('transformation_weight_history', JSON.stringify({ ...fsWH, ...localWH }));
+    }
     if (f.pullupHistory?.stringValue) localStorage.setItem('transformation_pullup_history', f.pullupHistory.stringValue);
     return true;
   } catch { return false; }
@@ -290,6 +298,17 @@ function txLoad() {
 
 function getWeightHistory() { try { return JSON.parse(localStorage.getItem('transformation_weight_history') || '{}'); } catch { return {}; } }
 function getPullupHistory() { try { return JSON.parse(localStorage.getItem('transformation_pullup_history') || '{}'); } catch { return {}; } }
+function getBfHistory()     { try { return JSON.parse(localStorage.getItem('transformation_bf_history')     || '{}'); } catch { return {}; } }
+function getVfHistory()     { try { return JSON.parse(localStorage.getItem('transformation_vf_history')     || '{}'); } catch { return {}; } }
+
+function filterByRange(history) {
+  const days = { '3M': 90, '6M': 180, '1Y': 365, '2Y': 730 }[S.chartRange];
+  if (!days) return history; // 'All'
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  return history.filter(d => d.date >= cutoffStr);
+}
 
 // ── Module-scoped styles ───────────────────────────────────────
 function injectStyles() {
@@ -297,9 +316,9 @@ function injectStyles() {
   const el = document.createElement('style');
   el.id = 'txm-styles';
   el.textContent = `
-    .txm { font-family: 'Inter', -apple-system, sans-serif; color: var(--text-primary); }
+    .txm { font-family: var(--font-sans); color: var(--text-primary); }
     .txm-header {
-      background: linear-gradient(135deg, #0D1320 0%, #111827 100%);
+      background: var(--bg-elevated);
       border: 1px solid ${GOLD_BORDER};
       border-radius: var(--radius-lg);
       padding: 24px 28px;
@@ -307,18 +326,18 @@ function injectStyles() {
       text-align: center;
     }
     .txm-tagline { color: ${GOLD}; font-size: 11px; text-transform: uppercase; letter-spacing: 3px; margin-bottom: 6px; font-weight: 700; }
-    .txm-title { font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 800; letter-spacing: 0.5px; color: var(--text-primary); }
+    .txm-title { font-family: var(--font-sans); font-size: 22px; font-weight: 800; letter-spacing: 0.5px; color: var(--text-primary); }
     .txm-countdown { display: flex; justify-content: center; gap: 48px; margin-top: 16px; flex-wrap: wrap; }
     .txm-cd-item { text-align: center; }
-    .txm-cd-num { font-size: 38px; font-weight: 800; color: ${GOLD}; line-height: 1; font-variant-numeric: tabular-nums; font-family: 'Space Grotesk', sans-serif; }
+    .txm-cd-num { font-size: 38px; font-weight: 800; color: ${GOLD}; line-height: 1; font-variant-numeric: tabular-nums; font-family: var(--font-sans); }
     .txm-cd-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-secondary); margin-top: 6px; }
     .txm-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-bottom: 14px; }
     .txm-card { background: var(--bg-surface); border: 1px solid var(--separator); border-radius: var(--radius-lg); padding: 18px 20px; }
     .txm-card h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-secondary); margin-bottom: 14px; font-weight: 700; display: flex; align-items: center; justify-content: space-between; }
     .txm-badge { background: ${GOLD}; color: #000; padding: 2px 9px; border-radius: 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.5px; }
-    .txm-workout-card { background: linear-gradient(135deg, #0D1320 0%, #111827 100%); border-color: ${GOLD_BORDER}; grid-column: 1 / -1; }
+    .txm-workout-card { background: var(--bg-elevated); border-color: ${GOLD_BORDER}; grid-column: 1 / -1; }
     .txm-workout-card h2 { color: ${GOLD}; }
-    .txm-workout-name { font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 800; color: var(--text-primary); margin-bottom: 4px; }
+    .txm-workout-name { font-family: var(--font-sans); font-size: 20px; font-weight: 800; color: var(--text-primary); margin-bottom: 4px; }
     .txm-workout-sub { font-size: 11px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 12px; }
     .txm-warmup { background: ${GOLD_DIM}; border-left: 3px solid ${GOLD}; padding: 10px 12px; border-radius: 6px; margin-bottom: 14px; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
     .txm-warmup-label { color: ${GOLD}; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-right: 6px; }
@@ -334,7 +353,7 @@ function injectStyles() {
     .txm-expand-btn { background: ${GOLD_DIM}; color: ${GOLD}; border: 1px solid ${GOLD_BORDER}; padding: 8px 12px; border-radius: 8px; font-size: 11px; font-weight: 700; cursor: pointer; width: 100%; margin-top: 10px; text-transform: uppercase; letter-spacing: 1px; font-family: inherit; }
     .txm-expand-btn:hover { background: rgba(201,169,97,0.2); }
     .txm-weight-display { text-align: center; padding: 10px 0; }
-    .txm-weight-num { font-family: 'Space Grotesk', sans-serif; font-size: 46px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; color: var(--text-primary); }
+    .txm-weight-num { font-family: var(--font-sans); font-size: 46px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; color: var(--text-primary); }
     .txm-weight-unit { font-size: 16px; color: var(--text-secondary); margin-left: 4px; }
     .txm-progress-bar { height: 10px; background: var(--bg-surface-2); border-radius: 5px; overflow: hidden; margin: 10px 0 6px; }
     .txm-progress-fill { height: 100%; background: linear-gradient(90deg, ${GOLD} 0%, #E8C878 100%); border-radius: 5px; transition: width 0.4s ease; }
@@ -358,12 +377,12 @@ function injectStyles() {
     .txm-check-time { font-size: 11px; color: var(--text-tertiary); margin-left: 8px; font-variant-numeric: tabular-nums; }
     .txm-macro-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
     .txm-macro-label { font-size: 12px; color: var(--text-secondary); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-    .txm-macro-value { font-family: 'Space Grotesk', sans-serif; font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .txm-macro-value { font-family: var(--font-sans); font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
     .txm-macro-bar { height: 8px; background: var(--bg-surface-2); border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
     .txm-macro-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
     .txm-protein-btns { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
     .txm-week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-top: 8px; }
-    .txm-day-box { aspect-ratio: 1; border: 1px solid var(--separator); border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; cursor: pointer; transition: all 0.15s; }
+    .txm-day-box { height: 52px; border: 1px solid var(--separator); border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 11px; cursor: pointer; transition: all 0.15s; }
     .txm-day-box:hover { border-color: ${GOLD}; }
     .txm-day-box.today { border-color: ${GOLD}; border-width: 2px; }
     .txm-day-box.done { background: ${GOLD}; color: #000; border-color: ${GOLD}; }
@@ -372,7 +391,7 @@ function injectStyles() {
     .txm-pull-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 8px; }
     .txm-recovery-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 8px; }
     .txm-stat-box { background: var(--bg-surface-2); padding: 12px 8px; border-radius: 10px; text-align: center; }
-    .txm-stat-num { font-family: 'Space Grotesk', sans-serif; font-size: 24px; font-weight: 800; color: ${GOLD}; line-height: 1; font-variant-numeric: tabular-nums; }
+    .txm-stat-num { font-family: var(--font-sans); font-size: 24px; font-weight: 800; color: ${GOLD}; line-height: 1; font-variant-numeric: tabular-nums; }
     .txm-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); margin-top: 4px; }
     .txm-stat-btns { display: flex; gap: 4px; justify-content: center; margin-top: 8px; }
     .txm-hint { font-size: 11px; color: var(--text-tertiary); margin-top: 12px; text-align: center; line-height: 1.4; }
@@ -380,11 +399,14 @@ function injectStyles() {
     .txm-chart-tab { padding: 8px 14px; cursor: pointer; font-size: 11px; font-weight: 700; color: var(--text-secondary); border-bottom: 2px solid transparent; text-transform: uppercase; letter-spacing: 0.5px; transition: all 0.15s; }
     .txm-chart-tab:hover { color: var(--text-primary); }
     .txm-chart-tab.active { color: ${GOLD}; border-bottom-color: ${GOLD}; }
+    .txm-range-btn { background: var(--bg-surface-2); border: 1px solid var(--separator); color: var(--text-secondary); padding: 4px 10px; border-radius: 6px; font-size: 10px; font-weight: 700; cursor: pointer; font-family: inherit; letter-spacing: 0.5px; transition: all 0.15s; }
+    .txm-range-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+    .txm-range-btn.active { background: ${GOLD_DIM}; border-color: ${GOLD}; color: ${GOLD}; }
     .txm-chart-svg { background: var(--bg-surface-2); border-radius: 10px; }
     .txm-chart-empty { text-align: center; color: var(--text-secondary); padding: 60px 20px; font-size: 13px; line-height: 1.6; }
     .txm-chart-summary { display: flex; justify-content: space-around; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--separator); flex-wrap: wrap; gap: 12px; }
     .txm-chart-stat { text-align: center; }
-    .txm-chart-stat-num { font-family: 'Space Grotesk', sans-serif; font-size: 20px; font-weight: 800; color: ${GOLD}; line-height: 1; font-variant-numeric: tabular-nums; }
+    .txm-chart-stat-num { font-family: var(--font-sans); font-size: 20px; font-weight: 800; color: ${GOLD}; line-height: 1; font-variant-numeric: tabular-nums; }
     .txm-chart-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary); margin-top: 4px; }
     .txm-recovery-tag { display: inline-block; padding: 3px 9px; border-radius: 10px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
     .txm-recovery-sauna { background: rgba(239,68,68,0.2); color: #FF6B6B; }
@@ -404,8 +426,9 @@ function injectStyles() {
     .txm-section-card { background: var(--bg-surface); border: 1px solid var(--separator); border-radius: var(--radius-lg); padding: 18px 20px; margin-bottom: 14px; }
     .txm-oura-card { margin-bottom: 14px; }
     .txm-oura-scores { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }
-    .txm-oura-score-box { background: var(--bg-surface-2); border-radius: 10px; padding: 12px 8px; text-align: center; }
-    .txm-oura-score-num { font-family: 'Space Grotesk', sans-serif; font-size: 26px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+    .txm-oura-score-box { background: var(--bg-surface-2); border-radius: 10px; padding: 12px 8px; text-align: center; border: 1.5px solid transparent; transition: border-color 0.15s; cursor: pointer; }
+    .txm-oura-score-box.active { border-color: ${GOLD}; }
+    .txm-oura-score-num { font-family: var(--font-sans); font-size: 26px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
     .txm-oura-score-label { font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-secondary); margin-top: 4px; }
     .txm-oura-durations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .txm-oura-dur { background: var(--bg-surface-2); border-radius: 10px; padding: 10px 12px; text-align: center; }
@@ -571,6 +594,8 @@ function renderWorkoutHTML(workout) {
 
 function render() {
   if (!_container) return;
+  // RENPHO scale is always authoritative — prevent stale localStorage/Firestore from overriding it
+  if (_renpho?.ok && _renpho.weight_lbs) S.weight = _renpho.weight_lbs;
   const now = new Date();
   const dayOfWeek = now.getDay();
   const workout = WORKOUTS[dayOfWeek];
@@ -596,13 +621,18 @@ function render() {
 
   let weekHTML = '';
   let weekCount = 0;
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - dayOfWeek);
   DAY_LETTERS.forEach((letter, idx) => {
+    const dayDate = new Date(weekStart);
+    dayDate.setDate(weekStart.getDate() + idx);
+    const dateNum = dayDate.getDate();
     let cls = 'txm-day-box';
     if (idx === dayOfWeek) cls += ' today';
     if (S.weekDone[idx]) { cls += ' done'; weekCount++; }
     weekHTML += `<div class="${cls}" data-txm="day" data-idx="${idx}">
       <div class="txm-day-letter">${letter}</div>
-      <div class="txm-day-num">${S.weekDone[idx] ? '✓' : idx === dayOfWeek ? '●' : ''}</div>
+      <div class="txm-day-num">${S.weekDone[idx] ? '✓' : dateNum}</div>
     </div>`;
   });
 
@@ -616,7 +646,8 @@ function render() {
   _container.innerHTML = `
     <div class="txm module-content">
 
-      <div class="txm-header">
+      <!-- PROTOCOL HEADER — hidden; re-enable by removing display:none -->
+      <div class="txm-header" style="display:none">
         <div class="txm-tagline">The Transformation Protocol</div>
         <div class="txm-title">${subtitle}</div>
         <div class="txm-countdown">
@@ -645,14 +676,56 @@ function render() {
         </div>
 
         <div class="txm-card">
-          <h2>Weight Progress <span class="txm-badge">${lost > 0 ? '−' + lost.toFixed(1) + ' lbs' : lost < 0 ? '+' + Math.abs(lost).toFixed(1) + ' lbs' : 'Start'}</span> ${aiBtn('weight')}</h2>
-          <div class="txm-weight-display">
+          <h2>Body Composition <span class="txm-badge">${lost > 0 ? '−' + lost.toFixed(1) + ' lbs' : lost < 0 ? '+' + Math.abs(lost).toFixed(1) + ' lbs' : 'Start'}</span> ${aiBtn('weight')}</h2>
+
+          <!-- Big weight + date -->
+          <div class="txm-weight-display" style="margin-bottom:2px">
             <span class="txm-weight-num">${S.weight.toFixed(1)}</span><span class="txm-weight-unit">lbs</span>
           </div>
+          ${(_renpho?.measured_at || _health?.weight_date) ? `<div style="font-size:10px;color:var(--text-tertiary);text-align:center;margin-bottom:10px">📅 ${_renpho?.measured_at ? new Date(_renpho.measured_at * 1000 || _renpho.measured_at).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : _health?.weight_date}</div>` : ''}
+
+          <!-- Full RENPHO body comp grid -->
+          ${(() => {
+            const r = _renpho?.ok ? _renpho : null;
+            const h = _health || {};
+            const bf  = r?.body_fat_pct  ?? h.body_fat_pct;
+            const bmi = r?.bmi           ?? h.bmi;
+            const lm  = r?.lean_mass_lbs ?? h.lean_mass_lbs;
+
+            const stat = (val, label, color = 'var(--text-primary)', suffix = '') =>
+              `<div style="text-align:center;padding:8px 4px;background:rgba(255,255,255,0.03);border-radius:8px">
+                <div style="font-size:16px;font-weight:800;color:${color};line-height:1.2">${val != null ? val + suffix : '—'}</div>
+                <div style="font-size:9px;text-transform:uppercase;letter-spacing:.7px;color:var(--text-tertiary);margin-top:2px">${label}</div>
+              </div>`;
+
+            const bfColor  = bf  >= 30 ? 'var(--color-red)' : bf  >= 25 ? GOLD : 'var(--color-green)';
+            const bmiColor = bmi >= 30 ? 'var(--color-red)' : bmi >= 25 ? GOLD : 'var(--color-green)';
+            const vfColor  = (r?.visceral_fat ?? 0) >= 13 ? 'var(--color-red)' : (r?.visceral_fat ?? 0) >= 10 ? GOLD : 'var(--color-green)';
+
+            return `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin:6px 0 10px">
+              ${stat(bf?.toFixed(1),                      'Body Fat',       bfColor,  '%')}
+              ${stat(lm?.toFixed(1),                      'Lean Mass',      'var(--color-green)', ' lb')}
+              ${stat(bmi?.toFixed(1),                     'BMI',            bmiColor)}
+              ${stat(r?.skeletal_muscle_pct?.toFixed(1),  'Skeletal Musc.', 'var(--color-green)', '%')}
+              ${stat(r?.visceral_fat?.toFixed(0),         'Visceral Fat',   vfColor)}
+              ${stat(r?.body_water_pct?.toFixed(1),       'Body Water',     'var(--accent)', '%')}
+              ${stat(r?.subcutaneous_fat_pct?.toFixed(1), 'Subcut. Fat',    GOLD, '%')}
+              ${stat(r?.bone_mass_lbs?.toFixed(1),        'Bone Mass',      'var(--text-secondary)', ' lb')}
+              ${stat(r?.protein_pct?.toFixed(1),          'Protein',        'var(--color-green)', '%')}
+              ${stat(r?.muscle_mass_lbs?.toFixed(1),      'Muscle Mass',    'var(--color-green)', ' lb')}
+              ${stat(r?.bmr_kcal?.toFixed(0),             'BMR',            'var(--text-secondary)', ' kcal')}
+              ${stat(r?.metabolic_age?.toFixed(0),        'Metabolic Age',  (r?.metabolic_age ?? 99) <= 40 ? 'var(--color-green)' : GOLD)}
+            </div>
+            ${!r ? `<div style="font-size:10px;color:var(--text-tertiary);text-align:center;margin-bottom:6px">⚠️ RENPHO bridge offline — add password to .env to unlock full stats</div>` : ''}`;
+          })()}
+
+          <!-- Weight goal progress bar -->
           <div class="txm-progress-bar"><div class="txm-progress-fill" style="width:${pct}%"></div></div>
-          <div class="txm-progress-labels"><span>200 lbs</span><span>${pct.toFixed(0)}%</span><span>170 lbs</span></div>
-          <div class="txm-input-row">
-            <input id="txm-weight-input" type="number" step="0.1" class="txm-input" placeholder="Log today's weight">
+          <div class="txm-progress-labels"><span>${START_WEIGHT} lbs</span><span>${pct.toFixed(0)}% to goal</span><span>${GOAL_WEIGHT} lbs</span></div>
+
+          <!-- Manual override -->
+          <div class="txm-input-row" style="margin-top:10px;opacity:${_renpho?.ok ? 0.5 : 1}">
+            <input id="txm-weight-input" type="number" step="0.1" class="txm-input" placeholder="${_renpho?.ok ? 'Auto-synced from RENPHO' : 'Log today\'s weight'}">
             <button class="txm-btn txm-btn-gold" data-txm="log-weight">Log</button>
           </div>
           ${aiSection('weight')}
@@ -756,31 +829,33 @@ function render() {
 
       </div>
 
+      ${renderTrendCard()}
+
+      ${renderWorkoutsCard()}
+
       <div class="txm-section-card">
         <h2 style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-secondary);margin-bottom:14px;font-weight:700;display:flex;align-items:center;justify-content:space-between">
           Progress Charts <span class="txm-badge" id="txm-chart-badge">— entries</span>
         </h2>
-        <div class="txm-chart-tabs">
-          ${['weight','hang','neg','rows'].map(t => `<div class="txm-chart-tab${S.activeChart === t ? ' active' : ''}" data-txm="chart-tab" data-chart="${t}">${{weight:'Weight',hang:'Dead Hang',neg:'Negatives',rows:'Inv. Rows'}[t]}</div>`).join('')}
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:4px">
+          <div class="txm-chart-tabs" style="margin-bottom:0;border-bottom:none">
+            ${['weight','bodyfat','visceral'].map(t => `<div class="txm-chart-tab${S.activeChart === t ? ' active' : ''}" data-txm="chart-tab" data-chart="${t}">${{weight:'Weight',bodyfat:'Body Fat %',visceral:'Visceral Fat'}[t]}</div>`).join('')}
+          </div>
+          <div style="display:flex;gap:4px">
+            ${['3M','6M','1Y','2Y','All'].map(r => `<button class="txm-range-btn${S.chartRange === r ? ' active' : ''}" data-txm="chart-range" data-range="${r}">${r}</button>`).join('')}
+          </div>
         </div>
+        <div style="height:1px;background:var(--separator);margin-bottom:12px"></div>
         <div id="txm-chart-container">
           <svg id="txm-chart-svg" class="txm-chart-svg" viewBox="0 0 700 280" preserveAspectRatio="xMidYMid meet" style="width:100%;height:280px"></svg>
           <div id="txm-chart-empty" class="txm-chart-empty" style="display:none">
-            <p>Log your weight and pull-up stats over time to see your progress chart here.</p>
+            <p>No data yet for this range — sync your RENPHO scale to populate charts.</p>
           </div>
         </div>
       </div>
 
-      <div class="txm-section-card">
-        <h2 style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-secondary);margin-bottom:14px;font-weight:700">Backup & Restore</h2>
-        <p class="txm-helper">iOS sometimes clears web app data. Export your progress regularly to keep it safe.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-          <button class="txm-btn txm-btn-gold" data-txm="export">⬇ Export Backup</button>
-          <button class="txm-btn" data-txm="import">⬆ Restore from Backup</button>
-        </div>
-      </div>
-
-      <div class="txm-section-card">
+<!-- PROTOCOL SECTION — hidden for now, re-enable by removing display:none -->
+      <div class="txm-section-card" style="display:none">
         <div class="txm-tab-bar">${tabBarHTML}</div>
         <div id="txm-tab-content">${tabContentHTML}</div>
       </div>
@@ -800,12 +875,16 @@ function renderChart() {
 
   let history, goal, label;
   if (type === 'weight') {
-    history = Object.entries(getWeightHistory()).map(([d,v]) => ({ date:d, value:parseFloat(v) })).sort((a,b) => a.date.localeCompare(b.date));
+    history = filterByRange(Object.entries(getWeightHistory()).map(([d,v]) => ({ date:d, value:parseFloat(v) })).sort((a,b) => a.date.localeCompare(b.date)));
     goal = GOAL_WEIGHT; label = 'lbs';
+  } else if (type === 'bodyfat') {
+    history = filterByRange(Object.entries(getBfHistory()).map(([d,v]) => ({ date:d, value:parseFloat(v) })).sort((a,b) => a.date.localeCompare(b.date)));
+    goal = 20; label = '%';
+  } else if (type === 'visceral') {
+    history = filterByRange(Object.entries(getVfHistory()).map(([d,v]) => ({ date:d, value:parseFloat(v) })).sort((a,b) => a.date.localeCompare(b.date)));
+    goal = 9; label = '';
   } else {
-    history = Object.entries(getPullupHistory()).map(([d,v]) => ({ date:d, value:v[type] })).sort((a,b) => a.date.localeCompare(b.date));
-    goal = type === 'hang' ? 60 : type === 'neg' ? 5 : 12;
-    label = type === 'hang' ? 'sec' : 'reps';
+    history = []; goal = null; label = '';
   }
 
   const badge = _container?.querySelector('#txm-chart-badge');
@@ -826,7 +905,7 @@ function renderChart() {
 
   let h=`<defs><linearGradient id="txmGrad" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" style="stop-color:${GOLD};stop-opacity:0.4"/><stop offset="100%" style="stop-color:${GOLD};stop-opacity:0"/></linearGradient></defs>`;
   for(let i=0;i<=4;i++){const y=m.top+(i/4)*cH,v=yMax-(i/4)*(yMax-yMin);h+=`<line stroke="var(--separator)" stroke-width="1" x1="${m.left}" y1="${y}" x2="${W-m.right}" y2="${y}"/><text fill="var(--text-tertiary)" font-size="10" font-family="Inter,sans-serif" x="${m.left-8}" y="${y+4}" text-anchor="end">${v.toFixed(0)}</text>`;}
-  if(goal>=yMin&&goal<=yMax){const gY=yS(goal);h+=`<line stroke="var(--color-green)" stroke-width="2" stroke-dasharray="6 4" opacity="0.7" x1="${m.left}" y1="${gY}" x2="${W-m.right}" y2="${gY}"/><text fill="var(--color-green)" font-size="10" font-weight="700" font-family="Inter,sans-serif" x="${W-m.right+6}" y="${gY+4}">GOAL ${goal}</text>`;}
+  if(goal!=null&&goal>=yMin&&goal<=yMax){const gY=yS(goal);h+=`<line stroke="var(--color-green)" stroke-width="2" stroke-dasharray="6 4" opacity="0.7" x1="${m.left}" y1="${gY}" x2="${W-m.right}" y2="${gY}"/><text fill="var(--color-green)" font-size="10" font-weight="700" font-family="Inter,sans-serif" x="${W-m.right+6}" y="${gY+4}">GOAL ${goal}${label}</text>`;}
   if(history.length>=2){let a=`M ${xS(0)} ${yS(history[0].value)}`,l=a;history.forEach((d,i)=>{if(i>0){a+=` L ${xS(i)} ${yS(d.value)}`;l+=` L ${xS(i)} ${yS(d.value)}`;}}); a+=` L ${xS(history.length-1)} ${m.top+cH} L ${xS(0)} ${m.top+cH} Z`;h+=`<path fill="url(#txmGrad)" opacity="0.3" d="${a}"/><path fill="none" stroke="${GOLD}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" d="${l}"/>`;}
   history.forEach((d,i)=>{const x=xS(i),y=yS(d.value),isL=i===history.length-1;h+=`<circle cx="${x}" cy="${y}" r="${isL?6:4}" fill="${isL?'var(--bg-surface)':GOLD}" stroke="${GOLD}" stroke-width="${isL?3:2}"/>`;if(isL)h+=`<text fill="var(--text-primary)" font-size="11" font-weight="700" font-family="Inter,sans-serif" x="${x}" y="${y-14}" text-anchor="middle">${d.value} ${label}</text>`;});
   const li=history.length===1?[0]:history.length<=4?history.map((_,i)=>i):[0,Math.floor(history.length/2),history.length-1];
@@ -837,12 +916,13 @@ function renderChart() {
   const old=_container?.querySelector('#txm-chart-summary');
   if(old)old.remove();
   if(history.length===0)return;
-  const first=history[0].value,cur=history[history.length-1].value,change=cur-first,toGoal=cur-goal;
-  const isLower=type==='weight',good=isLower?change<0:change>0;
+  const first=history[0].value,cur=history[history.length-1].value,change=cur-first,toGoal=goal!=null?cur-goal:null;
+  const isLower=type==='weight'||type==='bodyfat'||type==='visceral',good=isLower?change<0:change>0;
   const changeColor=change===0?'var(--text-secondary)':good?'var(--color-green)':'var(--color-red)';
-  const u=type==='weight'?' lbs':type==='hang'?' s':'';
+  const u=type==='weight'?' lbs':type==='bodyfat'?'%':'';
+  const dec=type==='weight'?1:type==='bodyfat'?1:0;
   const div=document.createElement('div');div.id='txm-chart-summary';div.className='txm-chart-summary';
-  div.innerHTML=`<div class="txm-chart-stat"><div class="txm-chart-stat-num">${first}${u}</div><div class="txm-chart-stat-label">Start</div></div><div class="txm-chart-stat"><div class="txm-chart-stat-num">${cur}${u}</div><div class="txm-chart-stat-label">Current</div></div><div class="txm-chart-stat"><div class="txm-chart-stat-num" style="color:${changeColor}">${change>0?'+':''}${change.toFixed(type==='weight'?1:0)}${u}</div><div class="txm-chart-stat-label">Change</div></div><div class="txm-chart-stat"><div class="txm-chart-stat-num">${isLower?Math.max(0,toGoal).toFixed(1):Math.max(0,-toGoal).toFixed(0)}${u}</div><div class="txm-chart-stat-label">To Goal</div></div>`;
+  div.innerHTML=`<div class="txm-chart-stat"><div class="txm-chart-stat-num">${first.toFixed(dec)}${u}</div><div class="txm-chart-stat-label">Start</div></div><div class="txm-chart-stat"><div class="txm-chart-stat-num">${cur.toFixed(dec)}${u}</div><div class="txm-chart-stat-label">Current</div></div><div class="txm-chart-stat"><div class="txm-chart-stat-num" style="color:${changeColor}">${change>0?'+':''}${change.toFixed(dec)}${u}</div><div class="txm-chart-stat-label">Change</div></div>${toGoal!=null?`<div class="txm-chart-stat"><div class="txm-chart-stat-num">${Math.max(0,toGoal).toFixed(dec)}${u}</div><div class="txm-chart-stat-label">To Goal</div></div>`:''}`;
   _container?.querySelector('#txm-chart-container')?.appendChild(div);
 }
 
@@ -871,14 +951,15 @@ function handleClick(e) {
   else if (action === 'check')    { const id=el.dataset.id; S.checks[id]=!S.checks[id]; _localDirty=true; txSave(); render(); return; }
   else if (action === 'day')      { const idx=parseInt(el.dataset.idx); S.weekDone[idx]=!S.weekDone[idx]; txSave(); render(); return; }
   else if (action === 'tab')      { S.activeTab=el.dataset.key; render(); return; }
-  else if (action === 'chart-tab'){ S.activeChart=el.dataset.chart; render(); return; }
+  else if (action === 'chart-tab')  { S.activeChart=el.dataset.chart; render(); return; }
+  else if (action === 'chart-range'){ S.chartRange=el.dataset.range; render(); return; }
   else if (action === 'toggle-workout') { S.workoutExpanded=!S.workoutExpanded; render(); return; }
-  else if (action === 'toggle-sleep')   { _ouraExpanded=!_ouraExpanded; const t=_container.querySelector('#txm-oura-tile'); if(t) t.innerHTML=renderOuraTile(); return; }
+  else if (action === 'oura-section')   { const s=el.dataset.section; _ouraSection=_ouraSection===s?null:s; const t=_container.querySelector('#txm-oura-tile'); if(t) t.innerHTML=renderOuraTile(); return; }
+  else if (action === 'oura-sync')      { syncOuraNow(); return; }
+  else if (action === 'toggle-workouts') { _workoutsExpanded=!_workoutsExpanded; render(); return; }
   else if (action === 'sleep-insight')  { generateSleepInsight(); return; }
   else if (action === 'ai-insight')     { generateInsight(el.dataset.key); return; }
   else if (action === 'reset-day')  { if(confirm("Reset today's checklist and protein?")){ S.checks={}; S.protein=0; _localDirty=true; txSave(); render(); } return; }
-  else if (action === 'export')   { doExport(); }
-  else if (action === 'import')   { doImport(); }
 
 }
 
@@ -891,31 +972,6 @@ function doLogProtein() {
   const input = _container?.querySelector('#txm-protein-input');
   const v = parseInt(input?.value);
   if (!isNaN(v) && v > 0) { S.protein = Math.max(0, S.protein + v); if(input) input.value = ''; txSave(); render(); }
-}
-function doExport() {
-  const data = {};
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k?.startsWith('transformation_')) data[k] = localStorage.getItem(k);
-  }
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
-  a.download = 'transformation_backup_' + todayKey() + '.json';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-}
-function doImport() {
-  const input = document.createElement('input');
-  input.type='file'; input.accept='.json,application/json';
-  input.onchange = (e) => {
-    const file = e.target.files[0]; if(!file)return;
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try { const d=JSON.parse(ev.target.result); let n=0; for(const k in d){if(k.startsWith('transformation_')){localStorage.setItem(k,d[k]);n++;}} alert('✓ Restored '+n+' entries. Reloading…'); location.reload(); }
-      catch(err) { alert('Import failed: '+err.message); }
-    };
-    reader.readAsText(file);
-  };
-  input.click();
 }
 
 // ── Oura sync ──────────────────────────────────────────────────
@@ -933,6 +989,7 @@ function fsVal(v) {
   if ('doubleValue'   in v) return v.doubleValue;
   if ('stringValue'   in v) return v.stringValue;
   if ('timestampValue'in v) return v.timestampValue;
+  if ('arrayValue'    in v) return (v.arrayValue.values || []).map(fsVal);
   if ('mapValue'      in v) {
     const fields = v.mapValue.fields || {};
     return Object.fromEntries(Object.entries(fields).map(([k, fv]) => [k, fsVal(fv)]));
@@ -974,8 +1031,31 @@ async function fetchOuraFromBridge() {
 }
 
 async function fetchOura() {
-  // Hit bridge first (fastest when on desktop), then fall back to / confirm with Firestore
   await Promise.allSettled([fetchOuraFromBridge(), fetchOuraFromFirestore()]);
+}
+
+async function fetchShortcutWorkouts() {
+  try {
+    const BRIDGE = localStorage.getItem('os_bridge_url') || 'http://localhost:3333';
+    const res = await fetch(`${BRIDGE}/shortcut-workouts`, { signal: AbortSignal.timeout(5000) });
+    const data = await res.json();
+    if (data.ok && Array.isArray(data.workouts) && data.workouts.length) {
+      _shortcutWorkouts = data.workouts;
+      render();
+    }
+  } catch {}
+}
+
+async function syncOuraNow() {
+  const btn = _container?.querySelector('#txm-oura-sync-btn');
+  if (btn) { btn.style.color = GOLD; btn.style.animation = 'txm-spin 0.7s linear infinite'; }
+  try {
+    const BRIDGE = localStorage.getItem('os_bridge_url') || 'http://localhost:3333';
+    const res = await fetch(`${BRIDGE}/refresh-oura`, { signal: AbortSignal.timeout(15000) });
+    const data = await res.json();
+    if (data.ok) { _oura = data; _ouraInsight = { text: null, loading: false, error: null }; render(); }
+  } catch {}
+  if (btn) { btn.style.color = ''; btn.style.animation = ''; }
 }
 
 function startOuraPolling() {
@@ -992,13 +1072,32 @@ function stopOuraPolling() {
 
 const HEALTH_FS_URL = `https://firestore.googleapis.com/v1/projects/inner-circle-crm/databases/(default)/documents/users/owner-inner-circle-crm/sync/apple_health?key=AIzaSyDINHNV1Ze3QfhXwBPwe22LnUe-xxnU-n4`;
 
+// Auto-sync weight (and body fat) from Apple Health data into S.weight + history
+function syncWeightFromHealth(h) {
+  if (!h?.weight_lbs) return;
+  const date = h.weight_date || todayKey();
+  // Update current weight
+  S.weight = h.weight_lbs;
+  // Add to history keyed by the measurement date
+  const wH = JSON.parse(localStorage.getItem('transformation_weight_history') || '{}');
+  wH[date] = h.weight_lbs;
+  localStorage.setItem('transformation_weight_history', JSON.stringify(wH));
+  localStorage.setItem('transformation_weight', String(h.weight_lbs));
+  txPushFirestore();
+}
+
 async function fetchAppleHealth() {
   // Try bridge first (Mac), then Firestore fallback (iPhone)
   try {
     const BRIDGE = localStorage.getItem("os_bridge_url") || "http://localhost:3333";
     const res = await fetch(`${BRIDGE}/apple-health`, { signal: AbortSignal.timeout(4000) });
     const data = await res.json();
-    if (data.ok) { _health = data; render(); return; }
+    if (data.ok) {
+      _health = data;
+      syncWeightFromHealth(data);
+      render();
+      return;
+    }
   } catch {}
 
   // Firestore fallback
@@ -1022,11 +1121,44 @@ async function fetchAppleHealth() {
       stand_hours_today:       num("stand_hours_today"),
       weight_lbs:              num("weight_lbs"),
       weight_date:             str("weight_date"),
+      body_fat_pct:            num("body_fat_pct"),
+      body_fat_date:           str("body_fat_date"),
+      lean_mass_lbs:           num("lean_mass_lbs"),
+      bmi:                     num("bmi"),
       vo2_max:                 num("vo2_max"),
       resting_hr:              num("resting_hr"),
       steps_7day:              arr("steps_7day"),
     };
+    syncWeightFromHealth(_health);
     render();
+  } catch {}
+}
+
+async function fetchRenpho() {
+  try {
+    const BRIDGE = localStorage.getItem('os_bridge_url') || 'http://localhost:3333';
+    const res  = await fetch(`${BRIDGE}/renpho`, { signal: AbortSignal.timeout(10000) });
+    const data = await res.json();
+    if (data.ok) {
+      _renpho = data;
+      syncWeightFromHealth(data);
+      // Store historical body fat + visceral fat from April 1
+      if (data.history?.length) {
+        const wH = {}, bfH = {}, vfH = {};
+        data.history.forEach(m => {
+          if (m.date && m.weight_lbs   != null) wH[m.date]  = m.weight_lbs;
+          if (m.date && m.body_fat_pct != null) bfH[m.date] = m.body_fat_pct;
+          if (m.date && m.visceral_fat != null) vfH[m.date] = m.visceral_fat;
+        });
+        // Merge weight history (RENPHO wins for dates it has data)
+        const existingWH = JSON.parse(localStorage.getItem('transformation_weight_history') || '{}');
+        localStorage.setItem('transformation_weight_history', JSON.stringify({ ...existingWH, ...wH }));
+        localStorage.setItem('transformation_bf_history', JSON.stringify(bfH));
+        localStorage.setItem('transformation_vf_history', JSON.stringify(vfH));
+        txPushFirestore(); // sync the full history up so Firestore stops overwriting it
+      }
+      render();
+    }
   } catch {}
 }
 
@@ -1106,6 +1238,190 @@ function miniStatBox(icon, val, label, color) {
     <div style="font-size:16px;font-weight:800;color:${color};font-family:'Space Grotesk',sans-serif;line-height:1">${val}</div>
     <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);margin-top:2px">${label}</div>
   </div>`;
+}
+
+function renderTrendCard() {
+  const o = _oura;
+  if (!o) return '';
+  const trend = Array.isArray(o.trend_120day) ? o.trend_120day : (Array.isArray(o.trend_7day) ? o.trend_7day : []);
+  if (trend.length < 2) return '';
+  const zepboundStart = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0,10); })();
+  const W = 480, H = 110, PAD = { t: 8, r: 8, b: 18, l: 24 };
+  const cW = W - PAD.l - PAD.r, cH = H - PAD.t - PAD.b;
+  const n = trend.length;
+  const xOf = i => PAD.l + (i / (n - 1)) * cW;
+  const yOf = v => v == null ? null : PAD.t + cH - ((v - 40) / 60) * cH;
+  const line = (key, color) => {
+    const segs = []; let seg = [];
+    trend.forEach((d, i) => {
+      const y = yOf(d[key]);
+      if (y == null) { if (seg.length) { segs.push(seg); seg = []; } }
+      else seg.push(`${xOf(i).toFixed(1)},${y.toFixed(1)}`);
+    });
+    if (seg.length) segs.push(seg);
+    return segs.map(s => `<polyline points="${s.join(' ')}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" opacity="0.85"/>`).join('');
+  };
+  const zbIdx = trend.findIndex(d => d.day >= zepboundStart);
+  const zbLine = zbIdx >= 0 ? `
+    <line x1="${xOf(zbIdx).toFixed(1)}" y1="${PAD.t}" x2="${xOf(zbIdx).toFixed(1)}" y2="${PAD.t+cH}" stroke="${GOLD}" stroke-width="1" stroke-dasharray="3,3" opacity="0.7"/>
+    <text x="${(xOf(zbIdx)+3).toFixed(1)}" y="${(PAD.t+7).toFixed(1)}" font-size="7" fill="${GOLD}" opacity="0.9">Zepbound</text>
+  ` : '';
+  const monthLabels = [];
+  trend.forEach((d, i) => {
+    if (!d.day) return;
+    const dt = new Date(d.day + 'T12:00:00');
+    if (dt.getDate() === 1 || i === 0)
+      monthLabels.push(`<text x="${xOf(i).toFixed(1)}" y="${H-2}" font-size="7" fill="var(--text-tertiary)" text-anchor="middle">${dt.toLocaleDateString('en-US',{month:'short'})}</text>`);
+  });
+  const gridLines = [70, 85].map(v => {
+    const y = yOf(v).toFixed(1);
+    return `<line x1="${PAD.l}" y1="${y}" x2="${PAD.l+cW}" y2="${y}" stroke="var(--separator)" stroke-width="0.5"/>
+            <text x="${PAD.l-3}" y="${(parseFloat(y)+3).toFixed(1)}" font-size="7" fill="var(--text-tertiary)" text-anchor="end">${v}</text>`;
+  }).join('');
+  return `
+    <div class="txm-section-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <h2 style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-secondary);font-weight:700;margin:0">120-Day Score Trend</h2>
+        <div style="display:flex;gap:10px">
+          <span style="font-size:9px;color:#AF52DE">● Sleep</span>
+          <span style="font-size:9px;color:var(--color-green)">● Readiness</span>
+          <span style="font-size:9px;color:var(--accent)">● Activity</span>
+        </div>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;overflow:visible">
+        ${gridLines}
+        ${zbLine}
+        ${line('sleep',     '#AF52DE')}
+        ${line('readiness', 'var(--color-green)')}
+        ${line('activity',  'var(--accent)')}
+        ${monthLabels.join('')}
+      </svg>
+    </div>`;
+}
+
+const WORKOUT_ICONS = {
+  'Running': '🏃', 'Cycling': '🚴', 'Walking': '🚶', 'Swimming': '🏊',
+  'Strength Training': '🏋️', 'Functional Strength': '🏋️', 'Hiit': '⚡', 'HIIT': '⚡',
+  'Yoga': '🧘', 'Hiking': '🥾', 'Tennis': '🎾', 'Pickleball': '🏓',
+  'Basketball': '🏀', 'Baseball': '⚾', 'Soccer': '⚽', 'Softball': '🥎',
+  'Rowing': '🚣', 'Elliptical': '🔄', 'Stair Climbing': '🪜',
+  'Core Training': '💪', 'Cross Training': '🔀', 'Mixed Cardio': '❤️',
+  'Pilates': '🤸', 'Dance': '💃', 'Jump Rope': '⭕', 'Boxing': '🥊',
+  'Climbing': '🧗', 'Golf': '⛳', 'Yardwork': '🌿', 'Housework': '🏠',
+  'Workout': '💪',
+};
+const fmtWorkoutName = s => s ? s.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Workout';
+
+function workoutRow(w, showDate = true) {
+  const icon  = WORKOUT_ICONS[w.activity] || WORKOUT_ICONS[fmtWorkoutName(w.activity)] || '💪';
+  const date  = w.date ? new Date(w.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+  const stats = [
+    w.duration_min ? `${w.duration_min} min` : null,
+    w.calories     ? `${w.calories} kcal`    : null,
+    w.distance_km  ? `${w.distance_km} km`   : null,
+    w.avg_hr       ? `♥ ${w.avg_hr} bpm`     : null,
+  ].filter(Boolean).join(' · ');
+  const srcColor = w.source === 'Apple Health' ? '#6B8CFF' : GOLD;
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--separator)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px;line-height:1">${icon}</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--text-primary)">${w.activity}</div>
+          ${showDate ? `<div style="font-size:10px;color:var(--text-tertiary)">${date} <span style="color:${srcColor};font-weight:600">${w.source}</span></div>` : ''}
+        </div>
+      </div>
+      <div style="text-align:right;font-size:11px;color:var(--text-secondary)">${stats}</div>
+    </div>`;
+}
+
+function mergedWorkouts() {
+  // Oura: all sessions, no internal dedup (3 walks on same day = 3 real sessions)
+  const oura = (Array.isArray(_oura?.workouts) ? _oura.workouts : []).map(w => ({
+    activity: fmtWorkoutName(w.activity),
+    date: w.day || '',
+    duration_min: w.duration_min,
+    calories: w.calories || null,
+    distance_km: w.distance_km > 0.1 ? w.distance_km : null,
+    source: 'Oura',
+  }));
+
+  // Shortcut workouts from iCloud (Apple Health, includes Health-imported activities)
+  const shortcut = _shortcutWorkouts.map(w => ({
+    activity: w.activity || 'Workout',
+    date: w.date || '',
+    duration_min: w.duration_min || null,
+    calories: w.calories || null,
+    distance_km: w.distance_km || null,
+    avg_hr: w.avg_hr || null,
+    source: 'Apple Health',
+  }));
+
+  // HealthKit binary workouts (when available)
+  const healthKit = (Array.isArray(_health?.workouts) ? _health.workouts : []).map(w => ({
+    activity: w.activity, date: w.date||'', duration_min: w.duration_min,
+    calories: w.calories||null, distance_km: w.distance_km||null,
+    avg_hr: w.avg_hr||null, source: 'Apple Health',
+  }));
+
+  // Dedup Apple Health sources against each other and against Oura
+  // Key: date + activity + duration (within 2 min = same session)
+  const ouraKeys = new Set(oura.map(w => `${w.date}|${w.activity}`));
+  const seen = new Set();
+  const ah = [...shortcut, ...healthKit].filter(w => {
+    if (ouraKeys.has(`${w.date}|${w.activity}`)) return false;
+    const key = `${w.date}|${w.activity}|${Math.round((w.duration_min||0)/2)}`;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+
+  return [...ah, ...oura].sort((a, b) => b.date > a.date ? 1 : b.date < a.date ? -1 : 0);
+}
+
+function renderWorkoutsCard() {
+  const all = mergedWorkouts();
+  if (!all.length) return '';
+
+  // Group by date for the timeline
+  const byDate = [];
+  let curDate = null, curGroup = [];
+  all.forEach(w => {
+    if (w.date !== curDate) {
+      if (curGroup.length) byDate.push({ date: curDate, workouts: curGroup });
+      curDate = w.date; curGroup = [w];
+    } else { curGroup.push(w); }
+  });
+  if (curGroup.length) byDate.push({ date: curDate, workouts: curGroup });
+
+  // Always show the 2 most recent days; rest behind toggle
+  const alwaysShow = byDate.slice(0, 2);
+  const hidden     = byDate.slice(2);
+
+  const renderDay = g => {
+    const label = new Date(g.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    return `
+      <div style="margin-bottom:4px">
+        <div style="font-size:10px;font-weight:700;color:var(--text-tertiary);text-transform:uppercase;letter-spacing:.5px;padding:6px 0 2px">${label}</div>
+        ${g.workouts.map(w => workoutRow(w, false)).join('')}
+      </div>`;
+  };
+
+  const hasAH = (_shortcutWorkouts.length || _health?.workouts?.length);
+  const badge = hasAH ? 'Apple Health + Oura' : 'Oura';
+  const totalSessions = all.length;
+  return `
+    <div class="txm-section-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <h2 style="font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--text-secondary);font-weight:700;margin:0">
+          Workout Log <span class="txm-badge" style="margin-left:8px">${badge}</span>
+        </h2>
+        ${hidden.length ? `<button data-txm="toggle-workouts" style="background:none;border:none;cursor:pointer;font-size:11px;color:var(--text-tertiary);padding:0">
+          ${_workoutsExpanded ? '▲ less' : `▽ +${hidden.reduce((n,g)=>n+g.workouts.length,0)} more`}
+        </button>` : ''}
+      </div>
+      ${alwaysShow.map(renderDay).join('')}
+      ${_workoutsExpanded ? hidden.map(renderDay).join('') : ''}
+    </div>`;
 }
 
 function renderOuraTile() {
@@ -1238,23 +1554,21 @@ function renderOuraTile() {
         </h2>
         <div style="display:flex;align-items:center;gap:8px">
           ${aiBtn('sleep')}
-          <button data-txm="toggle-sleep" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:16px;padding:4px;line-height:1">
-            ${_ouraExpanded ? '▲' : '▽'}
-          </button>
+          <button data-txm="oura-sync" title="Sync now" style="background:none;border:none;cursor:pointer;color:var(--text-tertiary);font-size:14px;padding:4px;line-height:1;transition:color 0.15s" id="txm-oura-sync-btn">↻</button>
         </div>
       </div>
 
-      <!-- 3 top scores -->
+      <!-- 3 top scores — tap to expand breakdown -->
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
-        <div class="txm-oura-score-box">
+        <div class="txm-oura-score-box${_ouraSection==='sleep'?' active':''}" data-txm="oura-section" data-section="sleep">
           <div class="txm-oura-score-num" style="color:${scoreColor(sleepScore)}">${sleepScore ?? '—'}</div>
           <div class="txm-oura-score-label">😴 Sleep</div>
         </div>
-        <div class="txm-oura-score-box">
+        <div class="txm-oura-score-box${_ouraSection==='readiness'?' active':''}" data-txm="oura-section" data-section="readiness">
           <div class="txm-oura-score-num" style="color:${scoreColor(readyScore)}">${readyScore ?? '—'}</div>
           <div class="txm-oura-score-label">⚡ Readiness</div>
         </div>
-        <div class="txm-oura-score-box">
+        <div class="txm-oura-score-box${_ouraSection==='activity'?' active':''}" data-txm="oura-section" data-section="activity">
           <div class="txm-oura-score-num" style="color:${scoreColor(actScore)}">${actScore ?? '—'}</div>
           <div class="txm-oura-score-label">🏃 Activity</div>
         </div>
@@ -1273,7 +1587,7 @@ function renderOuraTile() {
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <div>
             <div style="font-size:22px;font-weight:800;color:${stepsColor};font-family:'Space Grotesk',sans-serif;line-height:1">${steps}</div>
-            <div style="font-size:9px;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:.5px;margin-top:2px">Steps · Goal 10k</div>
+            <div style="font-size:9px;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:.5px;margin-top:2px">Steps · Goal 10k${o.activity_is_live === false ? ' · <span style="color:var(--color-orange)">yesterday</span>' : ''}</div>
           </div>
           <div style="text-align:right">
             ${activeCal ? `<div style="font-size:13px;font-weight:700;color:var(--color-orange)">🔥 ${activeCal} active</div>` : ''}
@@ -1289,14 +1603,9 @@ function renderOuraTile() {
         </div>
       </div>
 
-      <!-- Collapsed hint -->
-      ${!_ouraExpanded ? `<div style="text-align:center"><span style="font-size:11px;color:var(--text-tertiary);cursor:pointer" data-txm="toggle-sleep">▽ full breakdown</span></div>` : ''}
-
-      <!-- Expanded detail -->
-      ${_ouraExpanded ? `
-        <!-- Sleep breakdown -->
+      <!-- Sleep breakdown — shown when Sleep card is tapped -->
+      ${_ouraSection === 'sleep' ? `
         <div style="padding-top:12px;border-top:1px solid var(--separator);margin-top:4px">
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">Sleep Breakdown</div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
             ${miniStatBox('🌙', secToHM(o.total_sleep_sec), 'Total', 'var(--text-primary)')}
             ${miniStatBox('🔵', secToHM(o.deep_sleep_sec),  'Deep',  '#6B8CFF')}
@@ -1304,14 +1613,12 @@ function renderOuraTile() {
             ${miniStatBox('⬜', secToHM(o.light_sleep_sec), 'Light', 'var(--text-secondary)')}
           </div>
           <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
-            ${o.sleep_efficiency   != null ? miniStatBox('📊', o.sleep_efficiency+'%', 'Efficiency', o.sleep_efficiency>=85?'var(--color-green)':GOLD) : ''}
-            ${o.breath_avg         != null ? miniStatBox('💨', o.breath_avg+'/m', 'Breath', 'var(--text-secondary)') : ''}
-            ${o.avg_hr_sleep       != null ? miniStatBox('💗', o.avg_hr_sleep+' bpm', 'Avg HR', 'var(--text-secondary)') : ''}
-            ${bdi                  != null ? miniStatBox('😤', bdi, 'Disturbance', bdiColor) : ''}
+            ${o.sleep_efficiency != null ? miniStatBox('📊', o.sleep_efficiency+'%', 'Efficiency', o.sleep_efficiency>=85?'var(--color-green)':GOLD) : ''}
+            ${o.breath_avg       != null ? miniStatBox('💨', o.breath_avg+'/m', 'Breath', 'var(--text-secondary)') : ''}
+            ${o.avg_hr_sleep     != null ? miniStatBox('💗', o.avg_hr_sleep+' bpm', 'Avg HR', 'var(--text-secondary)') : ''}
+            ${bdi                != null ? miniStatBox('😤', bdi, 'Disturbance', bdiColor) : ''}
           </div>
-          ${o.bedtime_start ? `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:8px">🛏️ ${fmtTime(o.bedtime_start)} → ${fmtTime(o.bedtime_end)}${o.restless_periods ? ` · ${o.restless_periods} restless periods` : ''}</div>` : ''}
-
-          <!-- Sleep contributors -->
+          ${o.bedtime_start ? `<div style="font-size:11px;color:var(--text-secondary);margin-bottom:10px">🛏️ ${fmtTime(o.bedtime_start)} → ${fmtTime(o.bedtime_end)}${o.restless_periods ? ` · ${o.restless_periods} restless periods` : ''}</div>` : ''}
           ${Object.keys(sleepContrib).length ? `
             <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:4px">Sleep Contributors</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px">
@@ -1325,10 +1632,12 @@ function renderOuraTile() {
             </div>
           ` : ''}
         </div>
+      ` : ''}
 
-        <!-- Readiness contributors -->
-        ${Object.keys(readyContrib).length ? `
-          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--separator)">
+      <!-- Readiness breakdown — shown when Readiness card is tapped -->
+      ${_ouraSection === 'readiness' ? `
+        <div style="padding-top:12px;border-top:1px solid var(--separator);margin-top:4px">
+          ${Object.keys(readyContrib).length ? `
             <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:4px">Readiness Contributors</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px">
               ${contribBar('HRV Balance',        readyContrib.hrv_balance)}
@@ -1340,12 +1649,38 @@ function renderOuraTile() {
               ${contribBar('Recovery Index',     readyContrib.recovery_index)}
               ${contribBar('Sleep Regularity',   readyContrib.sleep_regularity)}
             </div>
-          </div>
-        ` : ''}
+          ` : '<div style="font-size:12px;color:var(--text-tertiary)">No readiness data available.</div>'}
+          ${stressLabel ? `
+            <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--separator)">
+              <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">Stress & Recovery</div>
+              <div style="display:flex;align-items:center;gap:12px">
+                <div style="font-size:14px;font-weight:700;color:${stressColor}">${stressLabel}</div>
+                <div style="font-size:11px;color:var(--text-secondary)">
+                  ${o.stress_high_min != null ? `😤 ${o.stress_high_min}m stress` : ''}
+                  ${o.recovery_high_min != null ? ` · ✨ ${o.recovery_high_min}m recovery` : ''}
+                </div>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      ` : ''}
 
-        <!-- Activity contributors -->
-        ${Object.keys(actContrib).length ? `
-          <div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--separator)">
+      <!-- Activity breakdown — shown when Activity card is tapped -->
+      ${_ouraSection === 'activity' ? (() => {
+        const todayStr = new Date().toISOString().slice(0,10);
+        const yesterStr = new Date(Date.now()-86400000).toISOString().slice(0,10);
+        const recentW = (Array.isArray(o.workouts) ? o.workouts : [])
+          .filter(w => w.day === todayStr || w.day === yesterStr);
+        return `
+        <div style="padding-top:12px;border-top:1px solid var(--separator);margin-top:4px">
+          ${recentW.length ? `
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:2px">Today's Activity</div>
+            ${recentW.map(w => workoutRow({ activity: fmtWorkoutName(w.activity), date: w.day,
+              duration_min: w.duration_min, calories: w.calories||null,
+              distance_km: w.distance_km > 0.1 ? w.distance_km : null, source: 'Oura' }, true)).join('')}
+            <div style="margin-top:10px"></div>
+          ` : ''}
+          ${Object.keys(actContrib).length ? `
             <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:4px">Activity Contributors</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 16px">
               ${contribBar('Stay Active',        actContrib.stay_active)}
@@ -1355,43 +1690,26 @@ function renderOuraTile() {
               ${contribBar('Meet Daily Targets', actContrib.meet_daily_targets)}
               ${contribBar('Recovery Time',      actContrib.recovery_time)}
             </div>
-          </div>
-        ` : ''}
+          ` : '<div style="font-size:12px;color:var(--text-tertiary)">No activity data available.</div>'}
+        </div>`;
+      })() : ''}
 
-        <!-- Stress -->
-        ${stressLabel ? `
-          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:8px">Stress & Recovery</div>
-            <div style="display:flex;align-items:center;gap:12px">
-              <div style="font-size:14px;font-weight:700;color:${stressColor}">${stressLabel}</div>
-              <div style="font-size:11px;color:var(--text-secondary)">
-                ${o.stress_high_min != null ? `😤 ${o.stress_high_min}m stress` : ''}
-                ${o.recovery_high_min != null ? ` · ✨ ${o.recovery_high_min}m recovery` : ''}
-              </div>
-            </div>
-          </div>
-        ` : ''}
-
-        ${workoutList}
-        ${trendChart}
-
-        <!-- AI Insight -->
-        <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700">✦ AI Insight</div>
-            ${!ins.text && !ins.loading ? `<button data-txm="sleep-insight" style="padding:4px 12px;border-radius:20px;border:none;background:var(--accent);color:#000;font-size:11px;font-weight:700;cursor:pointer">Analyze</button>` : ''}
-            ${ins.text ? `<button data-txm="sleep-insight" style="padding:4px 10px;border-radius:20px;border:1px solid var(--separator);background:none;color:var(--text-tertiary);font-size:11px;cursor:pointer">↺</button>` : ''}
-          </div>
-          ${ins.loading ? `
-            <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);font-style:italic">
-              <div style="width:12px;height:12px;border:2px solid var(--separator);border-top-color:var(--accent);border-radius:50%;animation:txm-spin 0.7s linear infinite"></div>
-              Analyzing…
-            </div>` :
-          ins.error ? `<div style="font-size:12px;color:var(--color-red)">${ins.error}</div>` :
-          ins.text  ? `<div style="font-size:13px;color:var(--text-primary);line-height:1.6">${ins.text}</div>` :
-          `<div style="font-size:12px;color:var(--text-tertiary)">Tap Analyze for a full breakdown of your sleep, readiness & activity.</div>`}
+      <!-- AI Insight — always visible -->
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--separator)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700">✦ AI Insight</div>
+          ${!ins.text && !ins.loading ? `<button data-txm="sleep-insight" style="padding:4px 12px;border-radius:20px;border:none;background:var(--accent);color:#000;font-size:11px;font-weight:700;cursor:pointer">Analyze</button>` : ''}
+          ${ins.text ? `<button data-txm="sleep-insight" style="padding:4px 10px;border-radius:20px;border:1px solid var(--separator);background:none;color:var(--text-tertiary);font-size:11px;cursor:pointer">↺</button>` : ''}
         </div>
-      ` : ''}
+        ${ins.loading ? `
+          <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);font-style:italic">
+            <div style="width:12px;height:12px;border:2px solid var(--separator);border-top-color:var(--accent);border-radius:50%;animation:txm-spin 0.7s linear infinite"></div>
+            Analyzing…
+          </div>` :
+        ins.error ? `<div style="font-size:12px;color:var(--color-red)">${ins.error}</div>` :
+        ins.text  ? `<div style="font-size:13px;color:var(--text-primary);line-height:1.6">${ins.text}</div>` :
+        `<div style="font-size:12px;color:var(--text-tertiary)">Tap a score card above to see its breakdown.</div>`}
+      </div>
     </div>`;
 }
 
@@ -1402,10 +1720,17 @@ export async function init(container, ctx) {
   injectStyles();
   txLoad();   // localStorage first (instant)
   render();
-  txLoadFirestore().then(loaded => { if (loaded) render(); }); // Firestore overrides if newer
-  fetchOura();          // async — re-renders when data arrives
-  startOuraPolling();   // poll Firestore every 5 min for cross-device sync
-  fetchAppleHealth();   // Apple Health via bridge or Firestore
+  txLoadFirestore().then(loaded => {
+    if (loaded) {
+      if (_renpho?.ok && _renpho.weight_lbs) S.weight = _renpho.weight_lbs;
+      render();
+    }
+  });
+  fetchOura();              // async — re-renders when data arrives
+  startOuraPolling();       // poll Firestore every 5 min for cross-device sync
+  fetchAppleHealth();       // Apple Health via bridge or Firestore
+  fetchRenpho();            // Full RENPHO body-comp via bridge
+  fetchShortcutWorkouts();  // Apple Health workouts via iOS Shortcut → iCloud Drive
   _interval = setInterval(() => {
     const key = todayKey();
     if (key !== window._txmDateKey) {
@@ -1430,6 +1755,7 @@ export function cleanup() {
   _ctx = null;
   _oura = null;
   _health = null;
+  _renpho = null;
   _ouraInsight = { text: null, loading: false, error: null };
   Object.keys(_insights).forEach(k => { _insights[k] = { text: null, loading: false, error: null }; });
 }

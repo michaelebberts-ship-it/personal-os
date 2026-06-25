@@ -53,7 +53,7 @@ function buildContext() {
     home: "Home Dashboard", calendar: "Calendar", reminders: "Tasks & Reminders",
     crm: "Inner Circle CRM", finances: "Finance", meals: "Meals",
     household: "Household", family: "Family", email: "Email",
-    transformation: "Fitness / Transformation",
+    transformation: "Daily Health",
   };
 
   return `You are Claude, the personal AI assistant inside the Ebberts Command Center.

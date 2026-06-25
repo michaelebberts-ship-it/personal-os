@@ -1,8 +1,10 @@
 import { MODULES } from "./config.js";
 import { refs, subscribe as dbSubscribe, subscribeDoc, uid } from "./db.js";
-import { setState, getState } from "./state.js";
-import { navigate, onModuleChange, initRouter, getCurrentModule, getAllModules } from "./router.js";
+import { setState, getState, subscribe as onState } from "./state.js";
+import { navigate, onModuleChange, initRouter, getCurrentModule, getModuleMeta, getVisibleModules } from "./router.js";
 import { initGlobalAI } from "./global-ai.js";
+import { seedMembersIfEmpty } from "./members.js";
+import { initProfileSwitcher, canEdit } from "./identity.js";
 
 // ── DOM refs ──────────────────────────────────────────────────
 const navList       = document.getElementById("nav-list");
@@ -15,8 +17,21 @@ const msDate        = document.getElementById("ms-date");
 const syncDot       = document.getElementById("sync-dot");
 const topBar        = document.getElementById("top-bar");
 
-// Dark mode only — no theme toggle needed
-document.documentElement.setAttribute("data-theme", "dark");
+// Theme: Light & Calm supports both light and dark, persisted in localStorage
+(function initTheme() {
+  const saved = localStorage.getItem('lc-theme') || 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  document.querySelector('meta[name="theme-color"]')
+    ?.setAttribute('content', saved === 'dark' ? '#0f1311' : '#eef1ec');
+})();
+
+document.getElementById('theme-toggle')?.addEventListener('click', () => {
+  const next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('lc-theme', next);
+  document.querySelector('meta[name="theme-color"]')
+    ?.setAttribute('content', next === 'dark' ? '#0f1311' : '#eef1ec');
+});
 
 // ── Clock + date ───────────────────────────────────────────────
 function updateClock() {
@@ -30,7 +45,7 @@ updateClock();
 
 // ── Nav rendering ─────────────────────────────────────────────
 function buildNav() {
-  const modules = getAllModules();
+  const modules = getVisibleModules();
   const current = getCurrentModule();
 
   // Desktop sidebar (icon-only, 64px)
@@ -133,8 +148,15 @@ function initDataSubscriptions() {
   // Household
   dbSubscribe(refs.household(), docs => setState({ householdTasks: docs }));
 
+  // Rewards catalog
+  dbSubscribe(refs.rewards(), docs => setState({ rewards: docs }));
+
   // Family
   dbSubscribe(refs.family(), docs => setState({ familyMembers: docs }));
+
+  // Members — canonical household identity (Family OS foundation). Nothing
+  // renders from this yet; it populates state for the upcoming profile switcher.
+  dbSubscribe(refs.members(), docs => setState({ members: docs }));
 
   // Email briefs
   dbSubscribe(refs.emailBriefs(), docs => setState({ emailBriefs: docs }));
@@ -194,8 +216,27 @@ async function boot() {
   // Start data subscriptions
   initDataSubscriptions();
 
+  // Seed canonical members once (idempotent; no-ops if already present).
+  seedMembersIfEmpty();
+
+  // Re-gate the nav when the active profile changes, or once members load
+  // (member scopes resolve async). Bounce off a module the profile can't see.
+  let _navKey = "";
+  onState(() => {
+    const s = getState();
+    const key = `${s.activeMember}|${s.members.length}`;
+    if (key === _navKey) return;
+    _navKey = key;
+    buildNav();
+    const meta = getModuleMeta(getCurrentModule());
+    if (meta?.scope && !canEdit(meta.scope)) navigate("home");
+  });
+
   // Build initial nav (modules are known from config, no async load needed)
   buildNav();
+
+  // Profile switcher in the mission strip (Family OS identity)
+  initProfileSwitcher();
 
   // Global AI assistant (persists across all modules)
   initGlobalAI(navigate);

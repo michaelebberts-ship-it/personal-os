@@ -5,6 +5,7 @@
  */
 
 import { refs, dbSet, dbUpdate, dbDelete, uid } from "../js/db.js";
+import { completeRecurring } from "./household.js";
 
 let _container = null;
 let _ctx = null;
@@ -32,7 +33,7 @@ const ACTIVITY_TYPES = ["⚽ Sports","🎵 Music","🎨 Art","📚 Tutoring","�
 
 function render() {
   if (!_container || !_ctx) return;
-  const { familyMembers, events } = _ctx.state();
+  const { familyMembers, events, householdTasks, members: osMembers } = _ctx.state();
 
   // Use DB members if seeded, else show defaults
   const members = familyMembers.length ? familyMembers : DEFAULT_MEMBERS;
@@ -63,7 +64,7 @@ function render() {
 
       ${_localState.view === "members"  ? renderMembers(members) : ""}
       ${_localState.view === "schedule" ? renderSchedule(familyEvents) : ""}
-      ${_localState.view === "shared"   ? renderShared() : ""}
+      ${_localState.view === "shared"   ? renderShared(osMembers || [], householdTasks || []) : ""}
 
       ${_localState.showAddSchedule ? renderAddScheduleModal() : ""}
     </div>
@@ -164,7 +165,7 @@ function renderSchedule(familyEvents) {
   `;
 }
 
-function renderShared() {
+function renderShared(osMembers, tasks) {
   const SHARED_ITEMS = [
     { label:"Grocery list", icon:"🛒", href:"#" },
     { label:"Dinner ideas", icon:"🍽️", href:"#" },
@@ -193,19 +194,47 @@ function renderShared() {
         </div>
       </div>
 
-      <!-- Chore chart -->
-      <div class="card">
-        <div class="card-header"><div class="card-title">🧹 Chore chart</div></div>
-        ${[
-          { who:"Son (13)", chores:["Take out trash","Walk dogs","Dishes"] },
-          { who:"Daughter (8)", chores:["Feed dogs","Make bed","Clean room"] },
-        ].map(row=>`<div class="list-row" style="align-items:flex-start">
-          <div style="min-width:100px;font-weight:700;font-size:var(--text-sm)">${row.who}</div>
-          <div style="flex:1;display:flex;flex-wrap:wrap;gap:var(--space-2)">
-            ${row.chores.map(c=>`<span class="pill" style="background:var(--bg-surface-2)">${c}</span>`).join("")}
-          </div>
-        </div>`).join("")}
+      <!-- Chore chart (live, from Household tasks) -->
+      ${renderChoreChart(osMembers, tasks)}
+    </div>
+  `;
+}
+
+function renderChoreChart(osMembers, tasks) {
+  const people = osMembers.filter(m => m.role !== "pet").sort((a,b)=>(a.order??99)-(b.order??99));
+  const open   = tasks.filter(t => !t.done);
+
+  // Buckets: one per person, plus anything unassigned so nothing hides.
+  const buckets = people.map(m => ({
+    key: m.id, name: m.name, emoji: m.emoji||"", color: m.color||"var(--accent)",
+    chores: open.filter(t => t.assignedTo === m.id),
+  }));
+  const unassigned = open.filter(t => !t.assignedTo);
+  if (unassigned.length) buckets.push({ key:"__none", name:"Unassigned", emoji:"📥", color:"var(--text-secondary)", chores:unassigned });
+
+  return `
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🧹 Chore chart</div>
+        <span style="font-size:var(--text-xs);color:var(--text-secondary)">${open.length} open · tap to complete</span>
       </div>
+      ${buckets.map(b => `
+        <div class="list-row" style="align-items:flex-start">
+          <div style="min-width:104px;font-weight:700;font-size:var(--text-sm);color:${b.color}">${b.emoji} ${escH(b.name)}</div>
+          <div style="flex:1;display:flex;flex-direction:column;gap:6px">
+            ${b.chores.length ? b.chores.map(t=>`
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" data-toggle-chore="${t.id}" style="width:16px;height:16px;cursor:pointer;accent-color:var(--color-green);flex-shrink:0">
+                <span style="font-size:var(--text-sm)">${escH(t.title)}</span>
+              </label>
+            `).join("") : `<span style="font-size:var(--text-xs);color:var(--text-tertiary)">No open chores</span>`}
+          </div>
+        </div>
+      `).join("")}
+      ${buckets.length ? "" : `
+        <div style="padding:var(--space-4);text-align:center;color:var(--text-secondary);font-size:var(--text-sm)">
+          Assign chores in the Household module to see them here.
+        </div>`}
     </div>
   `;
 }
@@ -278,6 +307,20 @@ function bindEvents() {
 
   _container.querySelectorAll("[data-del-fam-event]").forEach(btn=>{
     btn.addEventListener("click",async()=>await dbDelete(refs.event(btn.dataset.delFamEvent)));
+  });
+
+  // Chore chart write-back — tapping a member's chore marks it done in Household.
+  // Recurring chores spawn the next occurrence on completion.
+  _container.querySelectorAll("[data-toggle-chore]").forEach(cb=>{
+    cb.addEventListener("change",async()=>{
+      const { householdTasks } = _ctx.state();
+      const task = householdTasks.find(t=>t.id===cb.dataset.toggleChore);
+      if (cb.checked && task?.recurrence) {
+        await completeRecurring(task);
+      } else {
+        await dbUpdate(refs.task(cb.dataset.toggleChore),{done:cb.checked,doneDate:cb.checked?tod():null});
+      }
+    });
   });
 }
 

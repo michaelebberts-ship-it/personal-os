@@ -20,9 +20,12 @@ export const refs = {
   bills:       () => collection(db, ...userBase(), "bills"),
   household:   () => collection(db, ...userBase(), "household"),
   family:      () => collection(db, ...userBase(), "family"),
+  members:     () => collection(db, ...userBase(), "members"),
   emailBriefs: () => collection(db, ...userBase(), "emailBriefs"),
   mealPlans:   () => collection(db, ...userBase(), "mealPlans"),
   recipes:     () => collection(db, ...userBase(), "recipes"),
+  // Rewards catalog (additive — does not touch any existing collection)
+  rewards:     () => collection(db, ...userBase(), "rewards"),
 
   contact:    (id) => doc(db, ...userBase(), "contacts",    id),
   reminder:   (id) => doc(db, ...userBase(), "reminders",   id),
@@ -31,9 +34,11 @@ export const refs = {
   bill:       (id) => doc(db, ...userBase(), "bills",       id),
   task:       (id) => doc(db, ...userBase(), "household",   id),
   member:     (id) => doc(db, ...userBase(), "family",      id),
+  memberDoc:  (id) => doc(db, ...userBase(), "members",     id),
   emailBrief: (id) => doc(db, ...userBase(), "emailBriefs", id),
   mealPlan:   (id) => doc(db, ...userBase(), "mealPlans",   id),
   recipe:     (id) => doc(db, ...userBase(), "recipes",     id),
+  reward:     (id) => doc(db, ...userBase(), "rewards",     id),
 
   // This week's dinner assignments (singleton doc) — drives the Home "Tonight" card
   weekDinners: () => doc(db, ...userBase(), "meta", "weekDinners"),

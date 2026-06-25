@@ -288,7 +288,7 @@ function renderCard() {
   const macros = [m.protein?`🥩 ${escH(m.protein)}`:"", m.calories?`🔥 ${escH(m.calories)}`:""].filter(Boolean).join(" · ");
   const badges = [
     m.slot ? `<span class="pill" style="background:var(--bg-surface-2);color:var(--text-secondary)">${escH(m.slot)}</span>` : "",
-    m.freezable ? `<span class="pill" style="background:#E3F2FD;color:#1565C0">❄️ Freezer-friendly</span>` : "",
+    m.freezable ? `<span class="pill" style="background:var(--bg-surface-2);color:var(--text-secondary)">❄️ Freezer-friendly</span>` : "",
     m.servings ? `<span class="pill" style="background:var(--bg-surface-2);color:var(--text-secondary)">makes ${escH(m.servings)}</span>` : "",
     m.prepTime ? `<span class="pill" style="background:var(--bg-surface-2);color:var(--text-secondary)">⏱ ${escH(m.prepTime)}</span>` : "",
   ].filter(Boolean).join(" ");

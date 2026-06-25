@@ -92,25 +92,32 @@ function render() {
 
   // Merge, deduplicate by title+dueDate
   const seen = new Set();
-  const all = [...reminders, ...syncedReminders].filter(r => {
+  const allReminders = [...reminders, ...syncedReminders].filter(r => {
     const key = `${r.title}|${r.dueDate}`;
     if (seen.has(key)) return false;
     seen.add(key); return true;
-  }).filter(r => !r.completed);
+  });
 
-  const overdue = all.filter(isOverdue).sort((a,b) => a.dueDate < b.dueDate ? -1 : 1);
-  const dueToday = all.filter(isDueToday);
-  const upcoming = all.filter(r => !isOverdue(r) && !isDueToday(r));
-  const isSynced = !!remLastSync;
+  const all = allReminders.filter(r => !r.completed);
+  const recentDone = allReminders
+    .filter(r => r.completed)
+    .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0))
+    .slice(0, 8);
+
+  const overdue   = all.filter(isOverdue).sort((a,b) => a.dueDate < b.dueDate ? -1 : 1);
+  const dueToday  = all.filter(isDueToday);
+  const upcoming  = all.filter(r => !isOverdue(r) && !isDueToday(r));
+  const isSynced  = !!remLastSync;
+  const openCount = overdue.length + dueToday.length + upcoming.length;
 
   _container.innerHTML = `
     <div class="module-content">
 
-      ${renderHeader(remLastSync, isSynced, overdue.length, dueToday.length, all.length)}
+      ${renderTasksHeader(openCount, recentDone.length, isSynced, remLastSync)}
 
       ${renderNLBox()}
 
-      ${_local.view === "today"      ? renderToday(overdue, dueToday, upcoming) : ""}
+      ${_local.view === "today"      ? renderBoard(overdue, dueToday, upcoming, recentDone) : ""}
       ${_local.view === "categories" ? renderCategories(all) : ""}
       ${_local.view === "all"        ? renderAll(all) : ""}
       ${_local.view === "setup"      ? renderSetup() : ""}
@@ -122,28 +129,33 @@ function render() {
 }
 
 // ── Header ──────────────────────────────────────────────────────
-function renderHeader(remLastSync, isSynced, overdueCount, todayCount, total) {
+function renderTasksHeader(openCount, doneCount, isSynced, remLastSync) {
   return `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-4);gap:var(--space-2);flex-wrap:wrap">
-      <div style="display:flex;gap:var(--space-2);overflow-x:auto">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-4);flex-wrap:wrap;gap:var(--space-3)">
+      <div style="display:flex;align-items:center;gap:var(--space-3)">
+        <h2 style="font-size:var(--text-xl);font-weight:700;margin:0">Tasks</h2>
+        ${openCount > 0
+          ? `<span class="badge" style="background:var(--accent);color:var(--text-on-accent)">${openCount} open</span>`
+          : `<span class="badge" style="background:#dcf5ec;color:var(--color-green)">All clear</span>`
+        }
+        ${isSynced
+          ? `<span style="font-size:var(--text-xs);color:var(--text-tertiary)">Synced ${fmtLastSync(remLastSync)}</span>`
+          : `<span style="font-size:var(--text-xs);color:var(--color-orange);font-weight:600">⚠️ Not synced</span>`
+        }
+      </div>
+      <div style="display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap">
         ${[
-          { id:"today",      label:`📌 Today ${todayCount+overdueCount > 0 ? `<span class="badge">${todayCount+overdueCount}</span>` : ""}` },
-          { id:"categories", label:"🗂️ Categories" },
-          { id:"all",        label:`📋 All ${total}` },
-          { id:"setup",      label: isSynced ? "⚙️ Sync" : "🔗 Connect" },
+          { id:"today",      label:"Board" },
+          { id:"categories", label:"Lists" },
+          { id:"all",        label:"All" },
+          { id:"setup",      label: isSynced ? "Sync" : "Connect" },
         ].map(v => `
-          <button class="btn btn-sm ${_local.view===v.id?"btn-primary":"btn-secondary"}" data-view="${v.id}" style="flex-shrink:0;white-space:nowrap">
+          <button class="btn btn-sm ${_local.view===v.id?"btn-primary":"btn-secondary"}" data-view="${v.id}" style="white-space:nowrap">
             ${v.label}
           </button>
         `).join("")}
+        <button class="btn btn-primary btn-sm" id="add-rem-btn">+ New task</button>
       </div>
-      ${isSynced
-        ? `<div style="display:flex;align-items:center;gap:6px;font-size:var(--text-xs);color:var(--text-secondary);flex-shrink:0">
-             <span style="width:7px;height:7px;border-radius:50%;background:var(--color-green)"></span>
-             ${fmtLastSync(remLastSync)}
-           </div>`
-        : `<div style="font-size:var(--text-xs);color:var(--color-orange);font-weight:600;flex-shrink:0">⚠️ Not synced</div>`
-      }
     </div>
   `;
 }
@@ -208,48 +220,82 @@ function renderNLBox() {
   `;
 }
 
-// ── Today view ──────────────────────────────────────────────────
-function renderToday(overdue, dueToday, upcoming) {
-  const urgentItems = [...overdue, ...dueToday];
+// ── Board view (3 columns: Today | Upcoming | Done) ─────────────
+function renderBoard(overdue, dueToday, upcoming, recentDone) {
+  const todayItems = [...overdue, ...dueToday];
+  return `
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-4);align-items:start">
+
+      <div>
+        <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3)">
+          <span style="font-weight:700;font-size:var(--text-sm)">Today</span>
+          ${overdue.length ? `<span class="badge" style="background:var(--color-red);color:#fff">${overdue.length} overdue</span>` : ""}
+          ${dueToday.length ? `<span class="badge">${dueToday.length}</span>` : ""}
+        </div>
+        ${todayItems.length
+          ? todayItems.map(r => taskCard(r)).join("")
+          : `<div class="tile" style="text-align:center;color:var(--text-tertiary);font-size:var(--text-sm);padding:var(--space-5)">All clear ✓</div>`
+        }
+      </div>
+
+      <div>
+        <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3)">
+          <span style="font-weight:700;font-size:var(--text-sm)">Upcoming</span>
+          ${upcoming.length ? `<span class="badge">${upcoming.length}</span>` : ""}
+        </div>
+        ${upcoming.length
+          ? upcoming.slice(0, 10).map(r => taskCard(r)).join("")
+          : `<div class="tile" style="text-align:center;color:var(--text-tertiary);font-size:var(--text-sm);padding:var(--space-5)">Nothing scheduled</div>`
+        }
+        ${upcoming.length > 10 ? `
+          <button class="btn btn-ghost btn-sm w-full" data-view="all" style="margin-top:var(--space-2)">+${upcoming.length - 10} more</button>
+        ` : ""}
+      </div>
+
+      <div>
+        <div style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3)">
+          <span style="font-weight:700;font-size:var(--text-sm)">Done</span>
+          ${recentDone.length ? `<span class="badge" style="background:#dcf5ec;color:var(--color-green)">${recentDone.length}</span>` : ""}
+        </div>
+        ${recentDone.length
+          ? recentDone.map(r => taskCard(r, true)).join("")
+          : `<div class="tile" style="text-align:center;color:var(--text-tertiary);font-size:var(--text-sm);padding:var(--space-5)">Nothing completed yet</div>`
+        }
+      </div>
+
+    </div>
+  `;
+}
+
+// ── Task card (LC tile style, used in board columns) ─────────────
+function taskCard(r, isDone = false) {
+  const overdue  = !isDone && isOverdue(r);
+  const today    = !isDone && isDueToday(r);
+  const dueFmt   = fmtDue(r.dueDate);
+  const timeFmt  = fmtTime(r.dueTime);
+  const dueLabel = [dueFmt, timeFmt].filter(Boolean).join(", ");
+  const dueColor = overdue ? "var(--color-red)" : today ? "var(--color-orange)" : "var(--text-tertiary)";
+  const cat      = smartCategory(r);
+  const pIcon    = { high:"🔴", medium:"🟡" }[r.priority] || "";
+  const isApple  = r.source === "apple";
 
   return `
-    <div style="display:flex;flex-direction:column;gap:var(--space-4)">
-
-      ${urgentItems.length ? `
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">
-              ${overdue.length ? `🚨 ${overdue.length} overdue · ` : ""}📌 ${dueToday.length} due today
-            </div>
-            <button class="btn btn-primary btn-sm" id="add-rem-btn">+ Add</button>
-          </div>
-          ${urgentItems.map(r => reminderRow(r, true)).join("")}
-        </div>
-      ` : `
-        <div class="card">
-          <div style="padding:var(--space-5);text-align:center">
-            <div style="font-size:32px;margin-bottom:var(--space-2)">🎉</div>
-            <div style="font-weight:700;margin-bottom:var(--space-1)">All clear for today</div>
-            <div style="font-size:var(--text-sm);color:var(--text-secondary)">Nothing overdue or due today.</div>
-          </div>
-          <div style="padding:0 var(--space-4) var(--space-4)">
-            <button class="btn btn-secondary btn-sm w-full" id="add-rem-btn">+ Add reminder</button>
+    <div class="tile" style="margin-bottom:var(--space-2);${isDone ? "opacity:0.55;" : ""}${overdue ? "border-left:3px solid var(--color-red);padding-left:calc(var(--space-4) - 3px);" : ""}">
+      <div style="display:flex;align-items:flex-start;gap:var(--space-2)">
+        ${isApple
+          ? `<input type="checkbox" ${isDone?"checked":""} data-complete-apple="${r.id}" style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent);flex-shrink:0;margin-top:2px">`
+          : `<input type="checkbox" ${isDone?"checked":""} data-toggle-rem="${r.id}" style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent);flex-shrink:0;margin-top:2px">`
+        }
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:var(--text-sm);${isDone?"text-decoration:line-through;color:var(--text-tertiary);":""}">${escH(r.title)}</div>
+          ${dueLabel ? `<div style="font-size:var(--text-xs);color:${dueColor};margin-top:2px;font-weight:600">${dueLabel}</div>` : ""}
+          <div style="display:flex;align-items:center;gap:4px;margin-top:4px">
+            <span style="font-size:11px;color:var(--text-tertiary)">${cat.icon}</span>
+            ${pIcon ? `<span style="font-size:11px">${pIcon}</span>` : ""}
           </div>
         </div>
-      `}
-
-      ${upcoming.length ? `
-        <div class="section-title" style="margin-bottom:var(--space-2)">Coming up</div>
-        <div class="card">
-          ${upcoming.slice(0, 8).map(r => reminderRow(r, false)).join("")}
-          ${upcoming.length > 8 ? `
-            <div style="padding:var(--space-3);text-align:center">
-              <button class="btn btn-ghost btn-sm" data-view="all">See all ${upcoming.length} →</button>
-            </div>
-          ` : ""}
-        </div>
-      ` : ""}
-
+        ${!isApple && !isDone ? `<button class="btn" style="font-size:11px;color:var(--text-tertiary);padding:2px 4px" data-del-rem="${r.id}">✕</button>` : ""}
+      </div>
     </div>
   `;
 }

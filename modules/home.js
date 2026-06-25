@@ -17,8 +17,11 @@ let _dinnerModal = { open: false, loading: false };
 let _debrief = { text: null, loading: false, date: null, error: null };
 let _wx = null;
 let _icalEvents = [];
+let _oura = null;
+let _homeView = localStorage.getItem('lc-home-view') || 'bento'; // 'bento' | 'timeline' | 'focus'
 
 const BRIDGE = localStorage.getItem("os_bridge_url") || "http://localhost:3333";
+const OURA_FS_URL = `https://firestore.googleapis.com/v1/projects/inner-circle-crm/databases/(default)/documents/users/owner-inner-circle-crm/sync/oura?key=AIzaSyDINHNV1Ze3QfhXwBPwe22LnUe-xxnU-n4`;
 
 // ── Helpers ────────────────────────────────────────────────────
 const _esc = s => String(s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -64,6 +67,141 @@ async function generateDebrief(todayEvents, reminders) {
 }
 
 // ── Render ──────────────────────────────────────────────────────
+// ── Oura fetch (bridge first, Firestore fallback) ──────────────
+async function fetchOura() {
+  // Try local bridge (fastest on desktop)
+  try {
+    const res = await fetch(`${BRIDGE}/oura`, { signal: AbortSignal.timeout(2500) });
+    if (res.ok) {
+      const d = await res.json();
+      if (d.ok) { _oura = d; render(); return; }
+    }
+  } catch {}
+  // Firestore fallback (works on phone / when bridge is down)
+  try {
+    const res = await fetch(OURA_FS_URL);
+    if (!res.ok) return;
+    const doc = await res.json();
+    if (!doc.fields) return;
+    // Recursively unwrap Firestore typed values
+    function fsVal(v) {
+      if (!v) return null;
+      if ('stringValue'  in v) return v.stringValue;
+      if ('integerValue' in v) return Number(v.integerValue);
+      if ('doubleValue'  in v) return v.doubleValue;
+      if ('booleanValue' in v) return v.booleanValue;
+      if ('nullValue'    in v) return null;
+      if ('arrayValue'   in v) return (v.arrayValue.values || []).map(fsVal);
+      if ('mapValue'     in v) return Object.fromEntries(Object.entries(v.mapValue.fields || {}).map(([k, vv]) => [k, fsVal(vv)]));
+      return null;
+    }
+    _oura = { ok: true, ...Object.fromEntries(Object.entries(doc.fields).map(([k, v]) => [k, fsVal(v)])) };
+    render();
+  } catch {}
+}
+
+// ── Body Stats home tile ────────────────────────────────────────
+const GOLD = '#C9A961';
+function scoreColor(n) {
+  if (n == null) return 'var(--text-tertiary)';
+  return n >= 85 ? 'var(--color-green)' : n >= 70 ? GOLD : 'var(--color-red)';
+}
+function secToHM(s) {
+  if (!s) return '—';
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+}
+
+function bodyStatsTile() {
+  const o = _oura;
+
+  // Score pill
+  const pill = (val, label) => `
+    <div style="text-align:center;padding:10px 6px;background:var(--bg-surface-2);border-radius:10px;flex:1">
+      <div style="font-size:26px;font-weight:800;color:${scoreColor(val)};font-family:var(--font-sans);line-height:1">${val ?? '—'}</div>
+      <div style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-secondary);margin-top:3px">${label}</div>
+    </div>`;
+
+  const scores = o ? `
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      ${pill(o.sleep_score,    '😴 Sleep')}
+      ${pill(o.readiness_score,'⚡ Readiness')}
+      ${pill(o.activity_score, '🏃 Activity')}
+    </div>
+    <div style="display:flex;gap:16px;font-size:11px;color:var(--text-secondary);margin-bottom:10px;flex-wrap:wrap">
+      ${o.avg_hrv     != null ? `<span>💓 ${o.avg_hrv} ms HRV</span>` : ''}
+      ${o.resting_hr  != null ? `<span>❤️ ${o.resting_hr} bpm RHR</span>` : ''}
+      ${o.spo2_avg    != null ? `<span>🩸 ${o.spo2_avg}% SpO2</span>` : ''}
+      ${o.total_sleep_sec ? `<span>🌙 ${secToHM(o.total_sleep_sec)} sleep</span>` : ''}
+      ${o.steps       != null ? `<span style="color:${(o.steps||0)>=10000?'var(--color-green)':(o.steps||0)>=6000?GOLD:'var(--color-red)'}">👟 ${o.steps.toLocaleString()} steps</span>` : ''}
+    </div>` : `<div style="color:var(--text-tertiary);font-size:12px;padding:12px 0">Bridge offline — start serve_os.py</div>`;
+
+  // 120-day trend chart (reuse same SVG logic as transformation.js)
+  let chart = '';
+  const trend = o && Array.isArray(o.trend_120day) ? o.trend_120day : (o && Array.isArray(o.trend_7day) ? o.trend_7day : []);
+  if (trend.length > 1) {
+    const W = 520, H = 80, PAD = { t: 8, r: 8, b: 16, l: 22 };
+    const cW = W - PAD.l - PAD.r, cH = H - PAD.t - PAD.b;
+    const n = trend.length;
+    const xOf = i => PAD.l + (i / (n - 1)) * cW;
+    const yOf = v => v == null ? null : PAD.t + cH - ((v - 40) / 60) * cH;
+    const polyline = (key, color) => {
+      const segs = []; let seg = [];
+      trend.forEach((d, i) => {
+        const y = yOf(d[key]);
+        if (y == null) { if (seg.length) { segs.push(seg); seg = []; } }
+        else seg.push(`${xOf(i).toFixed(1)},${y.toFixed(1)}`);
+      });
+      if (seg.length) segs.push(seg);
+      return segs.map(s => `<polyline points="${s.join(' ')}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>`).join('');
+    };
+    // Zepbound marker (60 days ago — adjust once exact date confirmed)
+    const zepStart = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0,10); })();
+    const zbIdx = trend.findIndex(d => d.day >= zepStart);
+    const zbLine = zbIdx >= 0 ? `
+      <line x1="${xOf(zbIdx).toFixed(1)}" y1="${PAD.t}" x2="${xOf(zbIdx).toFixed(1)}" y2="${PAD.t+cH}" stroke="${GOLD}" stroke-width="1" stroke-dasharray="3,3" opacity="0.7"/>
+      <text x="${(xOf(zbIdx)+3).toFixed(1)}" y="${(PAD.t+7).toFixed(1)}" font-size="7" fill="${GOLD}" opacity="0.9">Zepbound</text>` : '';
+    const grid = [70, 85].map(v => {
+      const y = yOf(v).toFixed(1);
+      return `<line x1="${PAD.l}" y1="${y}" x2="${PAD.l+cW}" y2="${y}" stroke="var(--separator)" stroke-width="0.5"/>
+              <text x="${PAD.l-3}" y="${(parseFloat(y)+3).toFixed(1)}" font-size="7" fill="var(--text-tertiary)" text-anchor="end">${v}</text>`;
+    }).join('');
+    const monthLabels = [];
+    trend.forEach((d, i) => {
+      if (!d.day) return;
+      const dt = new Date(d.day + 'T12:00:00');
+      if (dt.getDate() === 1 || i === 0)
+        monthLabels.push(`<text x="${xOf(i).toFixed(1)}" y="${H-2}" font-size="7" fill="var(--text-tertiary)" text-anchor="middle">${dt.toLocaleDateString('en-US',{month:'short'})}</text>`);
+    });
+    chart = `
+      <div style="margin-top:4px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <div style="font-size:9px;text-transform:uppercase;letter-spacing:1px;color:var(--text-tertiary);font-weight:700">120-Day Trend</div>
+          <div style="display:flex;gap:8px">
+            <span style="font-size:9px;color:#AF52DE">● Sleep</span>
+            <span style="font-size:9px;color:var(--color-green)">● Readiness</span>
+            <span style="font-size:9px;color:var(--accent)">● Activity</span>
+          </div>
+        </div>
+        <svg viewBox="0 0 ${W} ${H}" style="width:100%;display:block;overflow:visible">
+          ${grid}${zbLine}
+          ${polyline('sleep','#AF52DE')}
+          ${polyline('readiness','var(--color-green)')}
+          ${polyline('activity','var(--accent)')}
+          ${monthLabels.join('')}
+        </svg>
+      </div>`;
+  }
+
+  return `
+    <div class="snap-tile bento-12 snap-tile--clickable" data-nav="transformation">
+      ${tileHeader('💪', 'Daily Health', 'Full view', 'transformation')}
+      <div class="snap-tile__body" style="padding:var(--space-4)">
+        ${scores}
+        ${chart}
+      </div>
+    </div>`;
+}
+
 function render() {
   if (!_container || !_ctx) return;
   const S = _ctx.state();
@@ -108,29 +246,45 @@ function render() {
   const topBar = document.getElementById("top-bar");
   if (topBar) topBar.classList.add("hidden");
 
+  // Choose main content based on view mode
+  let _viewContent;
+  if (_homeView === 'timeline') {
+    _viewContent = renderTimeline(todayEvents, dueRem, mergedReminders);
+  } else if (_homeView === 'focus') {
+    _viewContent = renderFocus(todayEvents, dueRem, overdueBills, hasApiKey);
+  } else {
+    _viewContent = null;
+  }
+
   _container.innerHTML = `
     <div style="padding: var(--space-5); max-width: 1200px; margin: 0 auto;">
 
       <!-- Greeting row -->
-      <div style="margin-bottom: var(--space-5); display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4);">
-        <div>
-          <div style="font-family:'Space Grotesk',sans-serif; font-size: 28px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; line-height: 1.1;">
-            ${greeting()}, Michael.
+      <div style="margin-bottom: var(--space-4);">
+        <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-3);">
+          <div>
+            <div style="font-family:var(--font-sans); font-size: 28px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; line-height: 1.1;">
+              ${greeting()}, Michael.
+            </div>
+            <div style="font-size: var(--text-sm); color: var(--text-secondary); margin-top: 4px;">
+              ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+            </div>
           </div>
-          <div style="font-size: var(--text-sm); color: var(--text-secondary); margin-top: 4px;">
-            ${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+          <div style="display:flex;gap:var(--space-3);flex-shrink:0;">
+            ${statPill("📅", todayEvents.length, "today", "#FF3B30")}
+            ${statPill("✓", dueRem.length, "due", "#FF9500")}
+            ${statPill("💰", overdueBills.length, "overdue", "#EF4444")}
+            ${statPill("🎂", birthdays.filter(b => b.days <= 14).length, "bdays", "#00D4FF")}
           </div>
         </div>
-        <div style="display:flex;gap:var(--space-3);flex-shrink:0;">
-          ${statPill("📅", todayEvents.length, "today", "#FF3B30")}
-          ${statPill("✓", dueRem.length, "due", "#FF9500")}
-          ${statPill("💰", overdueBills.length, "overdue", "#EF4444")}
-          ${statPill("🎂", birthdays.filter(b => b.days <= 14).length, "bdays", "#00D4FF")}
+        <div style="display:flex;gap:var(--space-2);">
+          ${[{v:'bento',label:'Grid'},{v:'timeline',label:'Timeline'},{v:'focus',label:'Focus'}].map(({v,label}) =>
+            `<button class="btn btn-sm ${_homeView===v?'btn-primary':'btn-secondary'}" data-home-view="${v}">${label}</button>`
+          ).join('')}
         </div>
       </div>
 
-      <!-- Bento grid -->
-      <div class="bento">
+      ${_viewContent !== null ? _viewContent : `<div class="bento">
 
         <!-- Debrief — spans full width -->
         ${debriefTile(hasApiKey)}
@@ -187,13 +341,184 @@ function render() {
           </div>
         </div>
 
-      </div>
+        <!-- Row 4: Body Stats — full width with 120-day trend -->
+        ${bodyStatsTile()}
+
+      </div>`}
 
       ${_dinnerModal.open ? renderDinnerModal(weekDinners) : ""}
     </div>
   `;
 
   bindEvents();
+}
+
+// ── Timeline view (Option B) ─────────────────────────────────────
+function renderTimeline(todayEvents, dueRem, allReminders) {
+  const today = tod();
+  const fmt12 = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2,'0')} ${h >= 12 ? 'PM' : 'AM'}`; };
+  const timeToMin = t => { if (!t) return 0; const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
+
+  const escH = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  function calColor(e) {
+    const cal = (e.calendar || '').toLowerCase();
+    if (cal.includes('ella'))                                                         return '#C77DFF';
+    if (cal.includes('george') || cal.includes('georgie'))                            return '#8B0000';
+    if (cal.includes('mom') || cal.includes('jill'))                                  return '#FF375F';
+    if (cal.includes('john deere') || cal.includes('jd') || cal.includes('travel'))  return '#366B2A';
+    if (cal.includes('family') || cal.includes('shared') || cal.includes('ebberts')) return '#007AFF';
+    return '#34C759';
+  }
+
+  const overdue    = dueRem.filter(r => r.dueDate && r.dueDate < today);
+  const dueToday   = dueRem.filter(r => r.dueDate === today);
+  const untimedDue = dueToday.filter(r => !r.dueTime);
+
+  const timedItems = [
+    ...todayEvents.map(e => ({ ...e, _kind: 'event' })),
+    ...dueToday.filter(r => r.dueTime).map(r => ({ ...r, time: r.dueTime, _kind: 'task' })),
+  ].sort((a, b) => timeToMin(a.time || '99:99') - timeToMin(b.time || '99:99'));
+
+  function row(item, isOv) {
+    if (item._kind === 'event') {
+      const color = calColor(item);
+      const timeStr = item.time ? fmt12(item.time) : 'All day';
+      return `
+        <div style="display:flex;align-items:stretch;padding:0 var(--space-4);border-bottom:1px solid var(--separator);">
+          <div style="width:54px;flex-shrink:0;padding:10px 10px 10px 0;text-align:right;font-size:var(--text-xs);color:var(--text-secondary);line-height:1.4">${timeStr}</div>
+          <div style="width:3px;background:${color};flex-shrink:0;border-radius:0;margin:6px 12px 6px 0"></div>
+          <div style="flex:1;padding:10px 0;min-width:0">
+            <div style="font-weight:600;font-size:var(--text-sm)">${escH(item.title)}</div>
+            <div style="font-size:var(--text-xs);color:var(--text-secondary)">
+              ${item.endTime ? fmt12(item.time) + ' – ' + fmt12(item.endTime) : ''}${item.location ? (item.endTime ? ' · ' : '') + escH(item.location) : ''}
+            </div>
+          </div>
+        </div>`;
+    }
+    const daysOv = isOv ? Math.round((new Date(today + 'T12:00:00') - new Date(item.dueDate + 'T12:00:00')) / 86400000) : 0;
+    const labelStr = isOv ? `${daysOv}d over` : 'today';
+    const isApple = item.source === 'apple';
+    return `
+      <div style="display:flex;align-items:stretch;padding:0 var(--space-4);border-bottom:1px solid var(--separator);${isOv ? 'background:rgba(255,59,48,0.05)' : ''}">
+        <div style="width:54px;flex-shrink:0;padding:10px 10px 10px 0;text-align:right;font-size:var(--text-xs);color:${isOv ? 'var(--color-red)' : 'var(--accent)'};font-weight:600;line-height:1.4">${labelStr}</div>
+        <div style="width:3px;background:${isOv ? 'var(--color-red)' : 'var(--accent)'};flex-shrink:0;border-radius:0;margin:6px 12px 6px 0"></div>
+        <div style="flex:1;padding:10px 0;display:flex;align-items:center;gap:var(--space-2);min-width:0">
+          ${isApple
+            ? `<input type="checkbox" data-complete-apple="${item.id}" style="width:16px;height:16px;accent-color:var(--accent);flex-shrink:0">`
+            : `<input type="checkbox" data-toggle-rem="${item.id}" style="width:16px;height:16px;accent-color:var(--accent);flex-shrink:0">`
+          }
+          <div style="min-width:0">
+            <div style="font-weight:600;font-size:var(--text-sm);color:${isOv ? 'var(--color-red)' : 'var(--text-primary)'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(item.title)}</div>
+            ${item.notes ? `<div style="font-size:var(--text-xs);color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(item.notes)}</div>` : ''}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  if (!overdue.length && !untimedDue.length && !timedItems.length) {
+    return `<div class="card" style="padding:var(--space-6);text-align:center">
+      <div style="font-size:32px;margin-bottom:var(--space-2)">🎉</div>
+      <div style="font-weight:700;margin-bottom:var(--space-1)">All clear today</div>
+      <div style="font-size:var(--text-sm);color:var(--text-secondary)">Nothing on the calendar or due today.</div>
+    </div>`;
+  }
+
+  const sectionHeader = (label, count) => count ? `
+    <div style="padding:var(--space-2) var(--space-4);background:var(--bg-surface-2);font-size:var(--text-xs);font-weight:700;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.06em">
+      ${label} · ${count}
+    </div>` : '';
+
+  return `
+    <div class="card" style="overflow:hidden">
+      ${overdue.length ? sectionHeader('Overdue', overdue.length) : ''}
+      ${overdue.map(r => row({...r, _kind:'task'}, true)).join('')}
+      ${untimedDue.length ? sectionHeader('Due today', untimedDue.length) : ''}
+      ${untimedDue.map(r => row({...r, _kind:'task'}, false)).join('')}
+      ${timedItems.length ? sectionHeader('Schedule', timedItems.length) : ''}
+      ${timedItems.map(item => row(item, false)).join('')}
+    </div>
+    <div style="margin-top:var(--space-3);display:flex;gap:var(--space-2)">
+      <button class="btn btn-secondary btn-sm" data-nav="calendar">📅 Full calendar →</button>
+      <button class="btn btn-secondary btn-sm" data-nav="reminders">✓ All reminders →</button>
+    </div>`;
+}
+
+// ── Focus view (Option C) ─────────────────────────────────────────
+function renderFocus(todayEvents, dueRem, overdueBills, hasApiKey) {
+  const escH = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const today = tod();
+  const now = new Date();
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  const timeToMin = t => { if (!t) return 0; const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
+  const fmt12 = t => { if (!t) return ''; const [h, m] = t.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2,'0')} ${h >= 12 ? 'PM' : 'AM'}`; };
+
+  const timed = todayEvents.filter(e => e.time).sort((a, b) => timeToMin(a.time) - timeToMin(b.time));
+  const currentEv = timed.find(e => {
+    const s = timeToMin(e.time);
+    const en = e.endTime ? timeToMin(e.endTime) : s + 60;
+    return nowMins >= s && nowMins < en;
+  });
+  const upcoming = timed.filter(e => timeToMin(e.time) > nowMins);
+  const nextEv = upcoming[0] || null;
+  const afterEv = upcoming[1] || null;
+
+  const overdueRem = dueRem.filter(r => r.dueDate && r.dueDate < today);
+  const dueTodayRem = dueRem.filter(r => r.dueDate === today);
+  const mostUrgent = [...overdueRem, ...dueTodayRem][0] || null;
+
+  function focusCard(labelEl, titleEl, subEl, accentColor, bg) {
+    return `
+      <div style="background:${bg};border:1px solid var(--separator);border-radius:var(--radius-lg);padding:var(--space-4);min-height:90px">
+        <div style="font-size:10px;font-weight:700;color:${accentColor};text-transform:uppercase;letter-spacing:.06em;margin-bottom:var(--space-2)">${labelEl}</div>
+        <div style="font-weight:700;font-size:var(--text-md);line-height:1.3;margin-bottom:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical">${titleEl}</div>
+        <div style="font-size:var(--text-xs);color:var(--text-secondary)">${subEl}</div>
+      </div>`;
+  }
+
+  const card1 = currentEv
+    ? focusCard('Happening now', escH(currentEv.title), fmt12(currentEv.time) + (currentEv.endTime ? ' – ' + fmt12(currentEv.endTime) : ''), 'var(--accent)', 'var(--accent-light)')
+    : (nextEv
+        ? focusCard('Up next', escH(nextEv.title), fmt12(nextEv.time), 'var(--text-secondary)', 'var(--bg-elevated)')
+        : focusCard('Up next', 'Nothing scheduled', 'Free the rest of the day', 'var(--text-secondary)', 'var(--bg-elevated)'));
+
+  const showAfter = currentEv ? nextEv : afterEv;
+  const card2 = showAfter
+    ? focusCard(currentEv ? 'Next up' : 'After that', escH(showAfter.title), fmt12(showAfter.time), 'var(--text-secondary)', 'var(--bg-elevated)')
+    : focusCard('Later today', `${upcoming.length} more event${upcoming.length !== 1 ? 's' : ''}`, 'tap to see full schedule', 'var(--text-secondary)', 'var(--bg-elevated)');
+
+  const card3 = overdueRem.length
+    ? focusCard(`${overdueRem.length} overdue`, mostUrgent ? escH(mostUrgent.title) : `${overdueRem.length} tasks`, mostUrgent?.dueDate ? 'Was due ' + mostUrgent.dueDate : 'tap to view', 'var(--color-red)', 'rgba(255,59,48,0.05)')
+    : (dueTodayRem.length
+        ? focusCard('Due today', mostUrgent ? escH(mostUrgent.title) : `${dueTodayRem.length} tasks`, 'tap to view', 'var(--accent)', 'var(--bg-elevated)')
+        : focusCard('Tasks', 'All clear', 'Nothing due today', 'var(--color-green)', 'var(--bg-elevated)'));
+
+  return `
+    <div style="display:flex;flex-direction:column;gap:var(--space-3)">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-3)">
+        ${card1}${card2}${card3}
+      </div>
+
+      ${debriefTile(hasApiKey)}
+
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--separator);border-radius:var(--radius-lg);overflow:hidden">
+        ${[
+          {label:'events today', value:todayEvents.length, color:'var(--text-primary)'},
+          {label:'tasks due', value:dueRem.length, color:dueRem.length>0?'var(--color-orange)':'var(--text-primary)'},
+          {label:_wx?.desc||'weather', value:_wx?`${_wx.tempF}°`:'—', color:'var(--text-primary)'},
+          {label:'bills due', value:overdueBills.length, color:overdueBills.length>0?'var(--color-red)':'var(--text-primary)'},
+        ].map((s,i) => `
+          <div style="padding:var(--space-3) var(--space-2);text-align:center${i<3?';border-right:1px solid var(--separator)':''}">
+            <div style="font-size:var(--text-xl);font-weight:800;color:${s.color}">${s.value}</div>
+            <div style="font-size:var(--text-xs);color:var(--text-secondary)">${s.label}</div>
+          </div>`).join('')}
+      </div>
+
+      <div style="display:flex;gap:var(--space-2)">
+        <button class="btn btn-secondary btn-sm" data-nav="calendar">📅 Full schedule →</button>
+        <button class="btn btn-secondary btn-sm" data-nav="reminders">✓ All reminders →</button>
+      </div>
+    </div>`;
 }
 
 // ── Tile builders ───────────────────────────────────────────────
@@ -217,7 +542,8 @@ const TILE_PROMPTS = {
   crm:       "Who should I reach out to? Any birthdays or people I haven't connected with in a while?",
   finances:  "How are my finances looking? Any bills overdue or coming up?",
   meals:     "What's for dinner tonight? Any suggestions or prep I need to do?",
-  household: "What household tasks need attention? What's most urgent?",
+  household:      "What household tasks need attention? What's most urgent?",
+  transformation: "How are my health stats looking? Sleep, readiness, activity, HRV — what's the takeaway and what should I focus on today?",
 };
 
 function tileHeader(icon, label, cta, tileKey) {
@@ -813,6 +1139,15 @@ async function _unused_executeActions(actionBlock) {
 function bindEvents() {
   if (!_container) return;
 
+  _container.querySelectorAll("[data-home-view]").forEach(btn => {
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      _homeView = btn.dataset.homeView;
+      localStorage.setItem('lc-home-view', _homeView);
+      render();
+    });
+  });
+
   _container.querySelectorAll("[data-tile-ai]").forEach(btn => {
     btn.addEventListener("click", e => {
       e.stopPropagation();
@@ -842,8 +1177,13 @@ function bindEvents() {
     regenBtn.addEventListener("click", () => {
       localStorage.removeItem(`debrief_${tod()}`);
       const S = _ctx.state();
+      const firestoreTitles = new Set((S.reminders || []).map(r => r.title));
+      const merged = [
+        ...(S.reminders || []),
+        ...(S.syncedReminders || []).filter(r => !firestoreTitles.has(r.title)),
+      ];
       const all = [...(S.events || []), ...(S.syncedEvents || [])];
-      generateDebrief(all.filter(e => e.date === tod()), S.reminders || []);
+      generateDebrief(all.filter(e => e.date === tod()), merged);
     });
   }
 
@@ -857,8 +1197,13 @@ function bindEvents() {
           showToast("API key saved ✓");
           _debrief.date = null;
           const S = _ctx.state();
+          const firestoreTitles = new Set((S.reminders || []).map(r => r.title));
+          const merged = [
+            ...(S.reminders || []),
+            ...(S.syncedReminders || []).filter(r => !firestoreTitles.has(r.title)),
+          ];
           const all = [...(S.events || []), ...(S.syncedEvents || [])];
-          generateDebrief(all.filter(e => e.date === tod()), S.reminders || []);
+          generateDebrief(all.filter(e => e.date === tod()), merged);
         });
       }
     });
@@ -882,9 +1227,17 @@ export async function init(container, ctx) {
   const { subscribe } = await import("../js/state.js");
   const u = subscribe(state => {
     render();
-    if (_debrief.date !== tod() && !_debrief.loading && getApiKey()) {
-      const all = [...(state.events || []), ...(state.syncedEvents || [])];
-      generateDebrief(all.filter(e => e.date === tod()), state.reminders || []);
+    const allEv = [...(state.events || []), ...(state.syncedEvents || [])];
+    const todayEv = allEv.filter(e => e.date === tod());
+    const firestoreTitles = new Set((state.reminders || []).map(r => r.title));
+    const merged = [
+      ...(state.reminders || []),
+      ...(state.syncedReminders || []).filter(r => !firestoreTitles.has(r.title)),
+    ];
+    // Only generate debrief once we have actual data to summarize
+    const hasData = todayEv.length > 0 || merged.length > 0;
+    if (_debrief.date !== tod() && !_debrief.loading && getApiKey() && hasData) {
+      generateDebrief(todayEv, merged);
     }
   });
   _unsubscribes.push(u);
@@ -898,6 +1251,9 @@ export async function init(container, ctx) {
     render();
   }).catch(() => {});
 
+  // Fetch Oura data (bridge → Firestore fallback)
+  fetchOura();
+
   // Fetch weather (geolocation) — re-render when it arrives
   fetchWeatherDetail().then(wx => {
     if (!wx) return;
@@ -910,11 +1266,8 @@ export async function init(container, ctx) {
     if (temp) temp.textContent = `${wx.tempF}° ${wx.desc}`;
   });
 
-  if (getApiKey() && _debrief.date !== tod()) {
-    const S = ctx.state();
-    const all = [...(S.events || []), ...(S.syncedEvents || [])];
-    generateDebrief(all.filter(e => e.date === tod()), S.reminders || []);
-  }
+  // Don't eagerly fire debrief on init — let the subscribe callback handle it
+  // once Firebase data has actually loaded (avoids empty-data cache poison)
 }
 
 export function cleanup() {
@@ -926,6 +1279,7 @@ export function cleanup() {
   _dinnerModal = { open: false, loading: false };
   _wx = null;
   _icalEvents = [];
+  _oura = null;
   _container = null;
   _ctx = null;
 }

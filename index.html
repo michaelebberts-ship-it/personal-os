@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Command Center">
-  <meta name="theme-color" content="#0A0E1A">
+  <meta name="theme-color" content="#eef1ec">
   <title>Ebberts Command Center</title>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/design-system.css">
   <link rel="stylesheet" href="css/layout.css">
 </head>
@@ -16,10 +16,9 @@
 
   <!-- ── Mission Strip (fixed global top bar) ──────────────────── -->
   <header class="mission-strip">
-    <div class="ms-brand">EBBERTS <span>Command Center</span></div>
+    <div class="ms-brand"><span class="ms-brand-accent">Ebberts</span> <span>Command Center</span></div>
     <div class="ms-divider"></div>
     <div class="ms-clock" id="live-clock"></div>
-    <div class="ms-divider"></div>
     <div class="ms-date" id="ms-date"></div>
     <div class="ms-divider"></div>
     <div class="ms-weather" id="ms-weather">
@@ -31,18 +30,16 @@
       <span class="ms-status-text" id="sync-label">Live</span>
     </div>
     <div class="ms-right">
-      <div class="ms-user-badge active-michael">
-        <div class="ms-avatar avatar-m">ME</div>
-        <span class="ms-user-name name-m">Michael</span>
-      </div>
+      <button class="ms-theme-toggle" id="theme-toggle" aria-label="Toggle light/dark mode"></button>
     </div>
   </header>
 
   <!-- ── App shell (below mission strip) ───────────────────────── -->
   <div id="app">
 
-    <!-- ── Sidebar (Desktop — 64px icon-only) ───────────────────── -->
+    <!-- ── Sidebar (Desktop — 80px icon-only) ───────────────────── -->
     <nav id="sidebar" aria-label="Main navigation">
+      <div class="sidebar-logo" aria-hidden="true">E</div>
       <ul id="nav-list" class="nav-list" role="list" aria-label="Modules"></ul>
     </nav>
 
