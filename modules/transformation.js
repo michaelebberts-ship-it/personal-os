@@ -1583,26 +1583,45 @@ function renderOuraTile() {
         ${tempDev ? miniStatBox('🌡️', tempDev, 'Temp Dev', Math.abs(o.temperature_deviation||0) < 0.5 ? 'var(--color-green)' : 'var(--color-red)') : miniStatBox('🌡️','—','Temp Dev','var(--text-tertiary)')}
       </div>
 
-      <!-- Activity row -->
-      <div style="padding:10px 12px;background:var(--bg-surface-2);border-radius:10px;margin-bottom:12px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div>
-            <div style="font-size:22px;font-weight:800;color:${stepsColor};font-family:'Space Grotesk',sans-serif;line-height:1">${steps}</div>
-            <div style="font-size:9px;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:.5px;margin-top:2px">Steps · Goal 10k${o.activity_is_live === false ? ' · <span style="color:var(--color-orange)">yesterday</span>' : ''}</div>
+      <!-- Activity row — prefer Apple Health live data when Oura is from yesterday -->
+      ${(() => {
+        const h = _health;
+        const ouraIsYesterday = o.activity_is_live === false;
+        // Use Apple Health's today data when Oura hasn't synced today yet
+        const liveSteps    = (ouraIsYesterday && h?.steps_today   != null) ? h.steps_today    : o.steps;
+        const liveCal      = (ouraIsYesterday && h?.calories_active_today != null) ? h.calories_active_today : (o.active_calories ?? null);
+        const liveExMins   = (ouraIsYesterday && h?.exercise_minutes_today != null) ? h.exercise_minutes_today : null;
+        const usingAH      = ouraIsYesterday && h?.steps_today != null;
+        const liveStepCol  = (liveSteps||0) >= 10000 ? 'var(--color-green)' : (liveSteps||0) >= 6000 ? GOLD : 'var(--color-red)';
+        const sourceLabel  = usingAH
+          ? `<span style="color:var(--color-green);font-weight:700">Apple Health · live</span>`
+          : ouraIsYesterday ? `<span style="color:var(--color-orange)">Oura · yesterday</span>` : '';
+        return `
+        <div style="padding:10px 12px;background:var(--bg-surface-2);border-radius:10px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div>
+              <div style="font-size:22px;font-weight:800;color:${liveStepCol};font-family:var(--font-sans);line-height:1">${liveSteps != null ? liveSteps.toLocaleString() : '—'}</div>
+              <div style="font-size:9px;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:.5px;margin-top:2px">Steps · Goal 10k${sourceLabel ? ' · ' + sourceLabel : ''}</div>
+            </div>
+            <div style="text-align:right">
+              ${liveCal    ? `<div style="font-size:13px;font-weight:700;color:var(--color-orange)">🔥 ${liveCal} active</div>` : ''}
+              ${liveExMins ? `<div style="font-size:11px;color:var(--text-secondary)">${liveExMins} min exercise</div>` : o.total_calories ? `<div style="font-size:11px;color:var(--text-secondary)">${o.total_calories} total kcal</div>` : ''}
+              ${!usingAH && o.equivalent_walking_km ? `<div style="font-size:11px;color:var(--text-secondary)">${o.equivalent_walking_km} km equiv.</div>` : ''}
+            </div>
           </div>
-          <div style="text-align:right">
-            ${activeCal ? `<div style="font-size:13px;font-weight:700;color:var(--color-orange)">🔥 ${activeCal} active</div>` : ''}
-            ${totalCal  ? `<div style="font-size:11px;color:var(--text-secondary)">${totalCal} total kcal</div>` : ''}
-            ${o.equivalent_walking_km ? `<div style="font-size:11px;color:var(--text-secondary)">${o.equivalent_walking_km} km equiv.</div>` : ''}
-          </div>
-        </div>
-        <div style="display:flex;gap:12px;font-size:11px;color:var(--text-secondary)">
-          ${o.high_activity_min   != null ? `<span>🔴 ${o.high_activity_min}m high</span>` : ''}
-          ${o.medium_activity_min != null ? `<span>🟡 ${o.medium_activity_min}m med</span>` : ''}
-          ${o.low_activity_min    != null ? `<span>🟢 ${o.low_activity_min}m low</span>` : ''}
-          ${o.sedentary_min       != null ? `<span>⚪ ${o.sedentary_min}m sedentary</span>` : ''}
-        </div>
-      </div>
+          ${!usingAH ? `
+          <div style="display:flex;gap:12px;font-size:11px;color:var(--text-secondary)">
+            ${o.high_activity_min   != null ? `<span>🔴 ${o.high_activity_min}m high</span>` : ''}
+            ${o.medium_activity_min != null ? `<span>🟡 ${o.medium_activity_min}m med</span>` : ''}
+            ${o.low_activity_min    != null ? `<span>🟢 ${o.low_activity_min}m low</span>` : ''}
+            ${o.sedentary_min       != null ? `<span>⚪ ${o.sedentary_min}m sedentary</span>` : ''}
+          </div>` : h?.stand_hours_today != null ? `
+          <div style="display:flex;gap:12px;font-size:11px;color:var(--text-secondary)">
+            <span>🧍 ${h.stand_hours_today} stand hrs</span>
+            ${h.exercise_minutes_today != null ? `<span>🏃 ${h.exercise_minutes_today}m exercise</span>` : ''}
+          </div>` : ''}
+        </div>`;
+      })()}
 
       <!-- Sleep breakdown — shown when Sleep card is tapped -->
       ${_ouraSection === 'sleep' ? `
@@ -1673,22 +1692,33 @@ function renderOuraTile() {
         const allW = Array.isArray(o.workouts) ? o.workouts : [];
         const todayW  = allW.filter(w => w.day === todayStr);
         const yesterW = allW.filter(w => w.day === yesterStr);
-        const mkRow = w => workoutRow({ activity: fmtWorkoutName(w.activity), date: w.day,
+        const mkRow = (w, src) => workoutRow({ activity: fmtWorkoutName(w.activity), date: w.day,
           duration_min: w.duration_min, calories: w.calories||null,
-          distance_km: w.distance_km > 0.1 ? w.distance_km : null, source: 'Oura' }, true);
+          distance_km: (w.distance_km||0) > 0.1 ? w.distance_km : null, source: src || w.source || 'Oura' }, true);
+        // Apple Health workouts for today (from bridge or shortcut) when Oura has none
+        const ahToday = [
+          ...(Array.isArray(_health?.workouts) ? _health.workouts : []),
+          ..._shortcutWorkouts,
+        ].filter(w => w.date === todayStr);
+        const showAhToday = todayW.length === 0 && ahToday.length > 0;
         return `
         <div style="padding-top:12px;border-top:1px solid var(--separator);margin-top:4px">
           ${todayW.length ? `
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-tertiary);font-weight:700;margin-bottom:2px">Today's Workouts</div>
-            ${todayW.map(mkRow).join('')}
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--color-green);font-weight:700;margin-bottom:2px">Today's Workouts · Oura</div>
+            ${todayW.map(w => mkRow(w, 'Oura')).join('')}
+            <div style="margin-top:10px"></div>
+          ` : ''}
+          ${showAhToday ? `
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--color-green);font-weight:700;margin-bottom:2px">Today's Workouts · Apple Health</div>
+            ${ahToday.map(w => mkRow(w, 'Apple Health')).join('')}
             <div style="margin-top:10px"></div>
           ` : ''}
           ${yesterW.length ? `
             <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:${GOLD};font-weight:700;margin-bottom:2px">Yesterday's Workouts</div>
-            ${yesterW.map(mkRow).join('')}
+            ${yesterW.map(w => mkRow(w, 'Oura')).join('')}
             <div style="margin-top:10px"></div>
           ` : ''}
-          ${!todayW.length && !yesterW.length ? `
+          ${!todayW.length && !showAhToday && !yesterW.length ? `
             <div style="font-size:12px;color:var(--text-tertiary);padding:6px 0">No workouts logged in the last 2 days.</div>
           ` : ''}
           ${Object.keys(actContrib).length ? `
