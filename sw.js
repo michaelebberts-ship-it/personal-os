@@ -2,7 +2,7 @@
 // Strategy: network-first with cache fallback.
 // New deploys take effect immediately via skipWaiting.
 
-const CACHE = 'ecc-v2';
+const CACHE = 'ecc-v3';
 
 const PRECACHE = [
   './',
@@ -29,6 +29,7 @@ const PRECACHE = [
   './modules/household.js',
   './modules/email.js',
   './modules/transformation.js',
+  './modules/weather.js',
 ];
 
 self.addEventListener('install', e => {
