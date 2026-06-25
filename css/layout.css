@@ -224,8 +224,11 @@
 }
 
 .nav-item__icon {
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .nav-item__label {
@@ -338,7 +341,7 @@
     cursor: pointer;
   }
   .bottom-item--active { color: var(--accent); }
-  .bottom-item__icon   { font-size: 20px; }
+  .bottom-item__icon   { font-size: 22px; display: flex; align-items: center; justify-content: center; }
   .bottom-item__label  { font-size: 10px; font-weight: 600; }
 
   .mission-strip .ms-date,

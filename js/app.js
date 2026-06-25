@@ -122,7 +122,7 @@ function ensureMoreSheet() {
       .more-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
       .more-item{display:flex;flex-direction:column;align-items:center;gap:6px;padding:14px 8px 12px;background:var(--bg-surface-2);border-radius:14px;border:none;cursor:pointer;font-family:var(--font-sans);transition:background .15s ease}
       .more-item--active{background:var(--accent-light)}
-      .more-item__icon{font-size:26px;line-height:1}
+      .more-item__icon{font-size:28px;line-height:1;display:flex;align-items:center;justify-content:center}
       .more-item__label{font-size:11px;font-weight:600;color:var(--text-secondary);white-space:nowrap}
       .more-item--active .more-item__label{color:var(--accent)}
       .ms-household-btn{background:var(--bg-surface-2);border:1px solid var(--separator);border-radius:999px;padding:4px 10px;font-size:16px;cursor:pointer;line-height:1;display:none;align-items:center}
