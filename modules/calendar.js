@@ -67,7 +67,11 @@ let _local = {
   nlBusy:       false,
   nlPreview:    null,
   nlListening:  false,
+  selectedEvent: null,  // event being shown in detail sheet
 };
+
+// Cache all events so click handler can look up by ID without re-deriving state
+let _allEvents = [];
 
 // ── Helpers ──────────────────────────────────────────────────────
 const tod  = () => new Date().toISOString().slice(0, 10);
@@ -212,6 +216,7 @@ function render() {
   if (!_container || !_ctx) return;
   const { events } = _ctx.state();
   const allEvents  = [...events, ..._local.icalEvents];
+  _allEvents = allEvents; // cache for click handler
 
   _container.innerHTML = `
     <div class="module-content">
@@ -222,6 +227,7 @@ function render() {
         _local.view === "month" ? renderMonth(allEvents)      :
                                   renderWeek(allEvents)}
       ${_local.showAddEvent ? renderAddModal() : ""}
+      ${_local.selectedEvent ? renderEventDetail() : ""}
     </div>
   `;
 
@@ -503,7 +509,7 @@ function renderThreeDay(allEvents) {
                   const color  = eventColor(ev);
                   const pct    = 100 / (ev._numCols || 1);
                   return `
-                    <div style="
+                    <div data-cal-event-id="${escH(ev.id)}" style="
                       position:absolute;
                       top:${top}px;
                       left:calc(${ev._col * pct}% + 1px);
@@ -516,7 +522,7 @@ function renderThreeDay(allEvents) {
                       overflow:hidden;
                       box-sizing:border-box;
                       z-index:1;
-                      cursor:default;
+                      cursor:pointer;
                     " title="${escH(ev.title)} — ${fmt12(ev.time)}${ev.endTime ? "–" + fmt12(ev.endTime) : ""}${ev.location ? "\n📍 " + ev.location : ""}">
                       <div style="font-size:10px;font-weight:700;color:${color};line-height:1.2;
                         overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
@@ -601,13 +607,13 @@ function renderMonth(allEvents) {
                   ${conflict ? `<span style="font-size:9px" title="Schedule conflict">⚠️</span>` : ""}
                 </div>
                 ${dayEvs.slice(0, 3).map(ev => `
-                  <div style="
+                  <div data-cal-event-id="${escH(ev.id)}" style="
                     font-size:9px;
                     background:${eventColor(ev)}20;
                     border-left:2px solid ${eventColor(ev)};
                     border-radius:2px;padding:1px 3px;margin-bottom:2px;
                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-                    color:var(--text-primary);line-height:1.4
+                    color:var(--text-primary);line-height:1.4;cursor:pointer
                   " title="${escH(ev.title)}">${escH(ev.title)}</div>
                 `).join("")}
                 ${dayEvs.length > 3
@@ -653,7 +659,7 @@ function renderDayDetail(allEvents) {
 function renderEventRow(e) {
   const color = eventColor(e);
   return `
-    <div style="display:flex;align-items:flex-start;gap:var(--space-2);padding:var(--space-2) var(--space-4);border-bottom:1px solid var(--separator)">
+    <div data-cal-event-id="${escH(e.id)}" style="display:flex;align-items:flex-start;gap:var(--space-2);padding:var(--space-2) var(--space-4);border-bottom:1px solid var(--separator);cursor:pointer" onmouseover="this.style.background='var(--bg-surface-2)'" onmouseout="this.style.background=''">
       <div style="width:3px;min-height:40px;border-radius:2px;background:${color};flex-shrink:0;margin-top:2px"></div>
       <div style="flex:1;min-width:0">
         <div style="font-weight:600;font-size:var(--text-sm)">${escH(e.title)}</div>
@@ -667,6 +673,112 @@ function renderEventRow(e) {
       ${e.source !== "apple"
         ? `<button class="btn" style="font-size:11px;color:var(--text-tertiary)" data-del-event="${e.id}">✕</button>`
         : ""}
+    </div>
+  `;
+}
+
+// ── Event detail sheet ───────────────────────────────────────────
+function durationStr(start, end) {
+  if (!start || !end) return "";
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  const mins = (eh * 60 + em) - (sh * 60 + sm);
+  if (mins <= 0) return "";
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+}
+
+function renderEventDetail() {
+  const e = _local.selectedEvent;
+  if (!e) return "";
+  const color   = eventColor(e);
+  const dateStr = new Date(e.date + "T12:00:00").toLocaleDateString("en-US",
+    { weekday: "long", month: "long", day: "numeric", year: "numeric" });
+  const dur     = durationStr(e.time, e.endTime);
+  const mapUrl  = e.location
+    ? "https://maps.apple.com/?q=" + encodeURIComponent(e.location)
+    : null;
+
+  const iconSVG = (paths) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+      style="flex-shrink:0;color:var(--text-tertiary)">${paths}</svg>`;
+
+  const clockIcon = iconSVG(`<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>`);
+  const pinIcon   = iconSVG(`<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>`);
+  const calIcon   = iconSVG(`<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>`);
+  const noteIcon  = iconSVG(`<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>`);
+
+  const row = (icon, content) => `
+    <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+      background:var(--bg-surface-2);border-radius:10px">
+      ${icon}
+      <div style="flex:1;min-width:0">${content}</div>
+    </div>`;
+
+  return `
+    <div id="cal-detail-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.5);
+      z-index:300;display:flex;align-items:flex-end;justify-content:center">
+      <div id="cal-detail-sheet" style="width:100%;max-width:600px;
+        background:var(--bg-elevated);border-radius:20px 20px 0 0;
+        padding:16px 20px calc(env(safe-area-inset-bottom,0px) + 28px);
+        max-height:85vh;overflow-y:auto;box-shadow:0 -4px 32px rgba(0,0,0,.2)">
+
+        <!-- Handle -->
+        <div style="width:36px;height:4px;background:var(--separator);border-radius:2px;margin:0 auto 18px"></div>
+
+        <!-- Title row -->
+        <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:18px">
+          <div style="width:4px;min-height:44px;background:${color};border-radius:2px;flex-shrink:0;margin-top:2px"></div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:20px;font-weight:800;line-height:1.2;color:var(--text-primary);
+              word-break:break-word">${escH(e.title)}</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:4px">${dateStr}</div>
+          </div>
+          <button id="cal-detail-close" style="
+            background:var(--bg-surface-2);border:none;border-radius:50%;
+            width:30px;height:30px;cursor:pointer;font-size:14px;
+            display:flex;align-items:center;justify-content:center;
+            flex-shrink:0;color:var(--text-secondary)">✕</button>
+        </div>
+
+        <!-- Detail rows -->
+        <div style="display:flex;flex-direction:column;gap:8px">
+          ${row(clockIcon, `
+            <div style="font-size:14px;font-weight:600;color:var(--text-primary)">
+              ${e.time ? fmt12(e.time) + (e.endTime ? " – " + fmt12(e.endTime) : "") : "All day"}
+            </div>
+            ${dur ? `<div style="font-size:11px;color:var(--text-secondary);margin-top:2px">${dur}</div>` : ""}
+          `)}
+
+          ${e.location ? `
+            <a href="${mapUrl}" target="_blank" rel="noopener" style="
+              display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+              background:var(--bg-surface-2);border-radius:10px;
+              text-decoration:none;cursor:pointer">
+              ${pinIcon}
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:600;color:var(--text-primary);
+                  word-break:break-word">${escH(e.location)}</div>
+                <div style="font-size:11px;color:var(--accent);margin-top:2px">Open in Maps →</div>
+              </div>
+            </a>
+          ` : ""}
+
+          ${e.calendar ? row(calIcon, `
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></span>
+              <span style="font-size:14px;font-weight:600;color:var(--text-primary)">${escH(e.calendar)}</span>
+              ${e.source === "apple" ? `<span style="font-size:11px;color:var(--text-secondary)">· iCloud</span>` : ""}
+            </div>
+          `) : ""}
+
+          ${e.notes ? row(noteIcon, `
+            <div style="font-size:13px;color:var(--text-primary);line-height:1.6;
+              white-space:pre-wrap;word-break:break-word">${escH(e.notes)}</div>
+          `) : ""}
+        </div>
+      </div>
     </div>
   `;
 }
@@ -961,6 +1073,18 @@ function bindEvents() {
     };
     rec.onerror = rec.onend = () => { _local.nlListening = false; render(); };
     rec.start();
+  });
+
+  // Event detail sheet — delegated click on any [data-cal-event-id]
+  _container.addEventListener("click", e => {
+    const el = e.target.closest("[data-cal-event-id]");
+    if (!el) return;
+    const ev = _allEvents.find(ev => ev.id === el.dataset.calEventId);
+    if (ev) { _local.selectedEvent = ev; render(); }
+  });
+  on("cal-detail-close", "click", () => { _local.selectedEvent = null; render(); });
+  on("cal-detail-overlay", "click", e => {
+    if (e.target.id === "cal-detail-overlay") { _local.selectedEvent = null; render(); }
   });
 }
 
