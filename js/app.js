@@ -6,6 +6,9 @@ import { initGlobalAI } from "./global-ai.js";
 import { seedMembersIfEmpty } from "./members.js";
 import { initProfileSwitcher, canEdit } from "./identity.js";
 
+// Version stamp — busts ES module cache on every page load
+const _V = Date.now();
+
 // ── DOM refs ──────────────────────────────────────────────────
 const navList       = document.getElementById("nav-list");
 const bottomNavList = document.getElementById("bottom-nav-list");
@@ -97,8 +100,8 @@ async function activateModule(id, meta) {
   buildNav(); // refresh active state
 
   try {
-    // Dynamically import the module
-    const mod = await import(`../modules/${id}.js`);
+    // Dynamically import the module (version stamp busts ES module cache)
+    const mod = await import(`../modules/${id}.js?v=${_V}`);
 
     // Cleanup previous
     if (activeModule?.cleanup) {

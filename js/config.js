@@ -29,6 +29,7 @@ export const MODULES = [
   { id: "household", name: "Household",  shortName: "Home",  icon: "🏠", color: "#5AC8FA", desc: "Home ops" },
   { id: "email",          name: "Email",          shortName: "Email",  icon: "📧", color: "#FF2D55", desc: "Daily brief" },
   { id: "transformation", name: "Daily Health",  shortName: "Health",    icon: "💪", color: "#C9A961", desc: "Health & Vitals" },
+  { id: "weather",        name: "Weather",       shortName: "Wx",        icon: "🌤️", color: "#5AC8FA", desc: "Forecast & radar" },
 ];
 
 export const COLORS = ["#FF6B35","#3498DB","#2ECC71","#9B59B6","#E91E63","#F39C12","#1ABC9C","#E74C3C"];
