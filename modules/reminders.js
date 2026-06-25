@@ -101,7 +101,11 @@ function render() {
   const all = allReminders.filter(r => !r.completed);
   const recentDone = allReminders
     .filter(r => r.completed)
-    .sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0))
+    .sort((a, b) => {
+      const ta = a.completedAt ? new Date(a.completedAt).getTime() : 0;
+      const tb = b.completedAt ? new Date(b.completedAt).getTime() : 0;
+      return tb - ta;
+    })
     .slice(0, 8);
 
   const overdue   = all.filter(isOverdue).sort((a,b) => a.dueDate < b.dueDate ? -1 : 1);
@@ -526,9 +530,13 @@ function bindEvents() {
   });
 
   _container.querySelectorAll("[data-toggle-rem]").forEach(cb =>
-    cb.addEventListener("change", async () =>
-      await dbUpdate(refs.reminder(cb.dataset.toggleRem), { completed: cb.checked })
-    )
+    cb.addEventListener("change", async () => {
+      const now = new Date().toISOString();
+      await dbUpdate(refs.reminder(cb.dataset.toggleRem), {
+        completed: cb.checked,
+        completedAt: cb.checked ? now : null,
+      });
+    })
   );
 
   _container.querySelectorAll("[data-complete-apple]").forEach(cb =>
@@ -544,8 +552,11 @@ function bindEvents() {
         });
         const data = await res.json();
         if (!data.ok) throw new Error("bridge failed");
-        // Optimistically drop it from state so it disappears immediately
-        const synced = getState().syncedReminders.filter(r => r.id !== id);
+        // Mark completed so it moves to Done column instead of disappearing
+        const now = new Date().toISOString();
+        const synced = getState().syncedReminders.map(r =>
+          r.id === id ? { ...r, completed: true, completedAt: now } : r
+        );
         setState({ syncedReminders: synced });
       } catch (e) {
         cb.checked = false;
