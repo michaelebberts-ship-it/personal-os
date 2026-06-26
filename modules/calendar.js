@@ -68,6 +68,7 @@ let _local = {
   nlPreview:    null,
   nlListening:  false,
   selectedEvent: null,  // event being shown in detail sheet
+  expandedDay:   null,  // date string for "+N more" day sheet
 };
 
 // Cache all events so click handler can look up by ID without re-deriving state
@@ -227,6 +228,7 @@ function render() {
         _local.view === "month" ? renderMonth(allEvents)      :
                                   renderWeek(allEvents)}
       ${_local.showAddEvent ? renderAddModal() : ""}
+      ${_local.expandedDay   ? renderDaySheet(allEvents)  : ""}
       ${_local.selectedEvent ? renderEventDetail() : ""}
     </div>
   `;
@@ -562,8 +564,6 @@ function renderMonth(allEvents) {
     cells.push({ iso: new Date(year, month + 1, cells.length - startDow - daysInMonth + 1).toISOString().slice(0, 10), current: false });
   }
 
-  const weeks     = [];
-  for (let i = 0; i < cells.length; i += 7) weeks.push(cells.slice(i, i + 7));
   const monthName = anchor.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
   return `
@@ -574,56 +574,73 @@ function renderMonth(allEvents) {
     </div>
 
     <div class="card" style="overflow:hidden;margin-bottom:var(--space-4)">
-      <!-- Day-of-week header -->
-      <div style="display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid var(--separator);background:var(--bg-surface-2)">
-        ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d =>
-          `<div style="text-align:center;padding:6px 2px;font-size:10px;font-weight:700;color:var(--text-secondary)">${d}</div>`
-        ).join("")}
-      </div>
+      <!-- Single flat grid — header + all day cells as direct children for perfect column alignment -->
+      <div style="display:grid;grid-template-columns:repeat(7,1fr)">
 
-      ${weeks.map(week => `
-        <div style="display:grid;grid-template-columns:repeat(7,1fr);border-bottom:1px solid var(--separator)">
-          ${week.map(({ iso, current }) => {
-            const d        = new Date(iso + "T12:00:00");
-            const isToday  = iso === today;
-            const isSel    = iso === _local.selectedDate;
-            const dayEvs   = allEvents.filter(e => e.date === iso);
-            const conflict = hasConflict(dayEvs);
-            return `
-              <div class="day-btn" data-date="${iso}" style="
-                min-height:72px;padding:4px;
-                border-right:1px solid var(--separator);
-                background:${isSel ? "var(--accent-light)" : "transparent"};
-                cursor:pointer;box-sizing:border-box;vertical-align:top
-              ">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
-                  <div style="
-                    width:20px;height:20px;border-radius:50%;
-                    background:${isToday ? "var(--accent)" : "transparent"};
-                    color:${isToday ? "#fff" : current ? "var(--text-primary)" : "var(--text-tertiary)"};
-                    display:flex;align-items:center;justify-content:center;
-                    font-size:11px;font-weight:${isToday ? "800" : "600"}
-                  ">${d.getDate()}</div>
-                  ${conflict ? `<span style="font-size:9px" title="Schedule conflict">⚠️</span>` : ""}
-                </div>
-                ${dayEvs.slice(0, 3).map(ev => `
-                  <div data-cal-event-id="${escH(ev.id)}" style="
-                    font-size:9px;
-                    background:${eventColor(ev)}20;
-                    border-left:2px solid ${eventColor(ev)};
-                    border-radius:2px;padding:1px 3px;margin-bottom:2px;
-                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-                    color:var(--text-primary);line-height:1.4;cursor:pointer
-                  " title="${escH(ev.title)}">${escH(ev.title)}</div>
-                `).join("")}
-                ${dayEvs.length > 3
-                  ? `<div style="font-size:9px;color:var(--text-tertiary);padding-left:2px">+${dayEvs.length - 3}</div>`
-                  : ""}
+        <!-- Day-of-week header (row 1) -->
+        ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d, i) => `
+          <div style="
+            text-align:center;padding:6px 2px;
+            font-size:10px;font-weight:700;color:var(--text-secondary);
+            background:var(--bg-surface-2);
+            border-bottom:1px solid var(--separator);
+            ${i < 6 ? "border-right:1px solid var(--separator);" : ""}
+            box-sizing:border-box;
+          ">${d}</div>
+        `).join("")}
+
+        <!-- Day cells -->
+        ${cells.map(({ iso, current }, idx) => {
+          const d         = new Date(iso + "T12:00:00");
+          const isToday   = iso === today;
+          const isSel     = iso === _local.selectedDate;
+          const dayEvs    = allEvents.filter(e => e.date === iso);
+          const conflict  = hasConflict(dayEvs);
+          const isLastCol = (idx % 7) === 6;
+          const isLastRow = idx >= cells.length - 7;
+          const overflow  = dayEvs.length - 3;
+          return `
+            <div class="day-btn" data-date="${iso}" style="
+              min-height:72px;padding:4px;
+              min-width:0;overflow:hidden;
+              background:${isSel ? "var(--accent-light)" : "transparent"};
+              cursor:pointer;box-sizing:border-box;
+              ${!isLastRow ? "border-bottom:1px solid var(--separator);" : ""}
+              ${!isLastCol ? "border-right:1px solid var(--separator);"  : ""}
+            ">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+                <div style="
+                  width:20px;height:20px;border-radius:50%;
+                  background:${isToday ? "var(--accent)" : "transparent"};
+                  color:${isToday ? "#fff" : current ? "var(--text-primary)" : "var(--text-tertiary)"};
+                  display:flex;align-items:center;justify-content:center;
+                  font-size:11px;font-weight:${isToday ? "800" : "600"}
+                ">${d.getDate()}</div>
+                ${conflict ? `<span style="font-size:9px" title="Schedule conflict">⚠️</span>` : ""}
               </div>
-            `;
-          }).join("")}
-        </div>
-      `).join("")}
+              ${dayEvs.slice(0, 3).map(ev => `
+                <div data-cal-event-id="${escH(ev.id)}" style="
+                  font-size:9px;
+                  background:${eventColor(ev)}20;
+                  border-left:2px solid ${eventColor(ev)};
+                  border-radius:2px;padding:1px 3px;margin-bottom:2px;
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                  color:var(--text-primary);line-height:1.4;cursor:pointer
+                " title="${escH(ev.title)}">${escH(ev.title)}</div>
+              `).join("")}
+              ${overflow > 0 ? `
+                <button data-expand-date="${iso}" style="
+                  display:block;width:100%;text-align:left;
+                  font-size:9px;font-weight:700;color:var(--accent);
+                  padding:1px 3px;margin-top:1px;
+                  background:none;border:none;cursor:pointer;
+                  font-family:inherit;line-height:1.4;
+                ">+${overflow} more</button>
+              ` : ""}
+            </div>
+          `;
+        }).join("")}
+      </div>
     </div>
 
     <!-- Selected day detail panel -->
@@ -986,6 +1003,60 @@ function navigate(dir) {
 }
 
 // ── Event binding ────────────────────────────────────────────────
+// ── Day overflow sheet ("+N more") ───────────────────────────────
+function renderDaySheet(allEvents) {
+  const iso    = _local.expandedDay;
+  const d      = new Date(iso + "T12:00:00");
+  const dayEvs = allEvents
+    .filter(e => e.date === iso)
+    .sort((a, b) => (a.time || "00:00") < (b.time || "00:00") ? -1 : 1);
+  const dateStr = d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+
+  return `
+    <div id="cal-day-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.5);
+      z-index:300;display:flex;align-items:flex-end;justify-content:center">
+      <div style="width:100%;max-width:600px;
+        background:var(--bg-elevated);border-radius:20px 20px 0 0;
+        padding:16px 20px calc(env(safe-area-inset-bottom,0px) + 28px);
+        max-height:85vh;overflow-y:auto;box-shadow:0 -4px 32px rgba(0,0,0,.2)">
+        <div style="width:36px;height:4px;background:var(--separator);border-radius:2px;margin:0 auto 18px"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <div>
+            <div style="font-size:18px;font-weight:800;color:var(--text-primary)">${dateStr}</div>
+            <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">${dayEvs.length} event${dayEvs.length !== 1 ? "s" : ""}</div>
+          </div>
+          <button id="cal-day-sheet-close" style="
+            background:var(--bg-surface-2);border:none;border-radius:50%;
+            width:30px;height:30px;cursor:pointer;font-size:14px;
+            display:flex;align-items:center;justify-content:center;
+            color:var(--text-secondary)">✕</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${dayEvs.map(ev => {
+            const color = eventColor(ev);
+            return `
+              <div data-cal-event-id="${escH(ev.id)}" style="
+                display:flex;align-items:center;gap:10px;
+                padding:10px 12px;background:var(--bg-surface-2);border-radius:10px;
+                cursor:pointer;border-left:3px solid ${color}
+              ">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:14px;font-weight:600;color:var(--text-primary);
+                    overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escH(ev.title)}</div>
+                  <div style="font-size:11px;color:var(--text-secondary);margin-top:2px">
+                    ${ev.time ? fmt12(ev.time) + (ev.endTime ? " – " + fmt12(ev.endTime) : "") : "All day"}${ev.location ? " · " + escH(ev.location) : ""}
+                  </div>
+                </div>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-tertiary);flex-shrink:0"><polyline points="9 18 15 12 9 6"/></svg>
+              </div>
+            `;
+          }).join("")}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function bindEvents() {
   if (!_container) return;
   const $  = id => document.getElementById(id);
@@ -1080,11 +1151,24 @@ function bindEvents() {
     const el = e.target.closest("[data-cal-event-id]");
     if (!el) return;
     const ev = _allEvents.find(ev => ev.id === el.dataset.calEventId);
-    if (ev) { _local.selectedEvent = ev; render(); }
+    if (ev) { _local.selectedEvent = ev; _local.expandedDay = null; render(); }
   });
   on("cal-detail-close", "click", () => { _local.selectedEvent = null; render(); });
   on("cal-detail-overlay", "click", e => {
     if (e.target.id === "cal-detail-overlay") { _local.selectedEvent = null; render(); }
+  });
+
+  // Day overflow sheet — delegated click on any [data-expand-date]
+  _container.addEventListener("click", e => {
+    const el = e.target.closest("[data-expand-date]");
+    if (!el) return;
+    e.stopPropagation();
+    _local.expandedDay = el.dataset.expandDate;
+    render();
+  });
+  on("cal-day-sheet-close", "click", () => { _local.expandedDay = null; render(); });
+  on("cal-day-overlay", "click", e => {
+    if (e.target.id === "cal-day-overlay") { _local.expandedDay = null; render(); }
   });
 }
 

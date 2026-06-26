@@ -2,7 +2,7 @@
 // Strategy: network-first with cache fallback.
 // New deploys take effect immediately via skipWaiting.
 
-const CACHE = 'ecc-v4';
+const CACHE = 'ecc-v5';
 
 const PRECACHE = [
   './',
