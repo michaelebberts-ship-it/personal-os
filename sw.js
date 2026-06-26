@@ -2,7 +2,7 @@
 // Strategy: network-first with cache fallback.
 // New deploys take effect immediately via skipWaiting.
 
-const CACHE = 'ecc-v5';
+const CACHE = 'ecc-v6';
 
 const PRECACHE = [
   './',
@@ -17,7 +17,6 @@ const PRECACHE = [
   './js/ai.js',
   './js/ical.js',
   './js/weather.js',
-  './js/calendar.js',
   './js/debrief.js',
   './modules/home.js',
   './modules/calendar.js',
